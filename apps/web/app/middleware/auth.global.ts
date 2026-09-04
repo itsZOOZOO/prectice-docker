@@ -4,7 +4,10 @@ export default defineNuxtRouteMiddleware((to) => {
 
   const publicPaths = new Set(['/login'])
   if (publicPaths.has(to.path)) {
-    if (auth.isLoggedIn.value) return navigateTo('/desk?view=dashboard')
+    if (auth.isLoggedIn.value) {
+      if (import.meta.client) return navigateTo(homePathForViewport())
+      return navigateTo('/desk?view=dashboard')
+    }
     return
   }
 

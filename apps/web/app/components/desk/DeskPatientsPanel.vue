@@ -15,12 +15,15 @@ type TimelineItem = {
   id: string
   noteId?: number
   labCaseId?: number
-  kind: 'note' | 'bill' | 'receipt' | 'rx' | 'appointment' | 'task' | 'lab'
+  planId?: number
+  kind: 'note' | 'bill' | 'receipt' | 'rx' | 'appointment' | 'task' | 'lab' | 'plan'
   title: string
   body?: string
   at: string
   author?: string | null
   attachments?: NoteAttachment[]
+  planLocked?: boolean
+  planCost?: number | null
 }
 
 type Client = ClientRow & {
@@ -31,6 +34,14 @@ type Client = ClientRow & {
 }
 
 type PendingFile = { file: File, preview: string | null }
+
+const props = withDefaults(defineProps<{
+  mobileChart?: boolean
+  fixedPatientId?: number | null
+}>(), {
+  mobileChart: false,
+  fixedPatientId: null
+})
 
 const lightbox = ref<string | null>(null)
 const noteFiles = ref<PendingFile[]>([])
@@ -70,9 +81,65 @@ function clearNoteFiles() {
 }
 
 const { api } = useApi()
-const { patientId, openPatient, clearPatient } = useDeskUrl()
+const deskUrl = useDeskUrl()
+const patientId = computed(() => props.fixedPatientId ?? deskUrl.patientId.value)
+
+function openPatient(id: number) {
+  if (props.mobileChart) {
+    void navigateTo(`/clients/${id}`)
+    return
+  }
+  void deskUrl.openPatient(id)
+}
+
+function clearPatient() {
+  if (props.mobileChart) {
+    void navigateTo('/dashboard')
+    return
+  }
+  void deskUrl.clearPatient()
+}
+
+function onMobileBack() {
+  if (mobileView.value === 'profile') {
+    mobileView.value = 'timeline'
+    nextTick(() => scrollTimelineToBottom())
+    return
+  }
+  clearPatient()
+}
+
+function openMobileProfile() {
+  mobileView.value = 'profile'
+}
+
+const telHref = computed(() => {
+  const digits = (client.value?.number || '').replace(/\D/g, '')
+  return digits ? `tel:${digits}` : null
+})
+
+const waHref = computed(() => {
+  const digits = (client.value?.number || '').replace(/\D/g, '')
+  if (!digits) return null
+  const withCountry = digits.length === 10 ? `91${digits}` : digits
+  return `https://wa.me/${withCountry}`
+})
+
+const profileBalance = computed(() =>
+  Math.max(0, profileStats.value.totalBilling - profileStats.value.paid)
+)
+
+function formatInr(n: number) {
+  return `₹${n.toLocaleString('en-IN')}`
+}
+
 const toast = useToast()
 const refreshBadges = inject<() => void>('deskRefreshBadges', () => {})
+const mobileRefreshBadges = inject<() => void>('mobileRefreshBadges', () => {})
+function bumpBadges() {
+  refreshBadges()
+  mobileRefreshBadges()
+}
 
 const q = ref('')
 const list = ref<ClientRow[]>([])
@@ -87,9 +154,18 @@ const noteShowDatetime = ref(false)
 const noteDatetimeCustomized = ref(false)
 const toggling = ref(false)
 const bookOpen = ref(false)
+/** Mobile chart: timeline (default) vs lite profile (name/photo tap). */
+const mobileView = ref<'timeline' | 'profile'>('timeline')
+const profileStats = ref({ visits: 0, activeRx: 0, totalBilling: 0, paid: 0 })
 const labCreateOpen = ref(false)
 const labDetailOpen = ref(false)
 const labDetailCaseId = ref<number | null>(null)
+const planCreateOpen = ref(false)
+const planEditId = ref<number | null>(null)
+const planViewOpen = ref(false)
+const planViewId = ref<number | null>(null)
+const planPricingOpen = ref(false)
+const planPricingId = ref<number | null>(null)
 const timelineEl = ref<HTMLElement | null>(null)
 const rxOpen = ref(false)
 const billOpen = ref(false)
@@ -115,6 +191,48 @@ function scrollTimelineToBottom() {
     })
   })
 }
+
+const floatingDateLabel = ref('')
+const showFloatingDate = ref(false)
+let floatingDateTimer: ReturnType<typeof setTimeout> | null = null
+
+const timelineRows = computed(() => {
+  let last = ''
+  return timeline.value.map((item) => {
+    const dk = dateKey(item.at)
+    const showSep = dk !== last
+    last = dk
+    return { item, showSep, dateKey: dk }
+  })
+})
+
+function onTimelineScroll() {
+  const area = timelineEl.value
+  if (!area) return
+
+  const nodes = area.querySelectorAll<HTMLElement>('[data-date]')
+  const containerTop = area.getBoundingClientRect().top
+  const viewportMiddle = containerTop + 120
+
+  for (const node of nodes) {
+    const rect = node.getBoundingClientRect()
+    if (rect.top <= viewportMiddle && rect.bottom >= containerTop) {
+      const d = node.getAttribute('data-date')
+      if (d) floatingDateLabel.value = formatFloatingDate(d)
+      break
+    }
+  }
+
+  showFloatingDate.value = true
+  if (floatingDateTimer) clearTimeout(floatingDateTimer)
+  floatingDateTimer = setTimeout(() => {
+    showFloatingDate.value = false
+  }, 1000)
+}
+
+onUnmounted(() => {
+  if (floatingDateTimer) clearTimeout(floatingDateTimer)
+})
 
 function formatWhen(iso: string) {
   const d = new Date(iso)
@@ -145,7 +263,7 @@ async function loadList() {
 async function loadChart(id: number) {
   loadingChart.value = true
   try {
-    const [c, notes, bills, receipts, rxs, appts, tasks, labs] = await Promise.all([
+    const [c, notes, bills, receipts, rxs, appts, tasks, labs, plans] = await Promise.all([
       api<Client>(`/clients/${id}`),
       api<{ note_id: number, body: string, created_at: string, author_name: string | null, attachments?: NoteAttachment[] }[]>(`/clients/${id}/notes`),
       api<{ bill_id: number, amount_due: number, status: string, description: string | null, issued_at: string }[]>(`/clients/${id}/bills`),
@@ -153,9 +271,18 @@ async function loadChart(id: number) {
       api<{ prescription_id: number, prescription_date: string, notes: string | null, items: { medicine_name: string }[] }[]>(`/clients/${id}/prescriptions`),
       api<{ items: { appointment_id: number, appointment_date: string, appointment_time: string, status: string, doctor_name: string | null, service_name: string | null }[] }>('/appointments', { query: { client_id: id, limit: 50 } }),
       api<{ items: { task_id: number, task_description: string, status: string, due_date: string | null, created_at: string }[] }>('/tasks', { query: { client_id: id } }),
-      api<{ cases: { case_id: number, case_ref: string, case_type: string | null, lab_name: string, stage: string, status: string, created_at: string, expected_return_date: string | null }[] }>(`/clients/${id}/lab-cases`)
+      api<{ cases: { case_id: number, case_ref: string, case_type: string | null, lab_name: string, stage: string, status: string, created_at: string, expected_return_date: string | null }[] }>(`/clients/${id}/lab-cases`),
+      api<{ plan_id: number, title: string, summary: string | null, total_cost: number | null, locked_at: string | null, created_at: string, photos: { url: string | null }[] }[]>(`/clients/${id}/treatment-plans`)
     ])
     client.value = c
+    const totalBilling = bills.reduce((sum, b) => sum + Number(b.amount_due || 0), 0)
+    const paid = receipts.reduce((sum, r) => sum + Number(r.amount || 0), 0)
+    profileStats.value = {
+      visits: appts.items.length,
+      activeRx: rxs.length,
+      totalBilling,
+      paid
+    }
     const items: TimelineItem[] = []
     for (const n of notes) {
       items.push({
@@ -226,6 +353,24 @@ async function loadChart(id: number) {
         at: lc.created_at
       })
     }
+    for (const p of plans) {
+      const cost = p.total_cost != null
+        ? `₹${Number(p.total_cost).toLocaleString('en-IN')}`
+        : 'Not priced'
+      items.push({
+        id: `plan-${p.plan_id}`,
+        planId: p.plan_id,
+        kind: 'plan',
+        title: `Plan · ${p.title || 'Treatment plan'}`,
+        body: [p.summary, cost, p.locked_at ? 'Locked' : null].filter(Boolean).join(' · ') || undefined,
+        at: p.created_at,
+        planLocked: !!p.locked_at,
+        planCost: p.total_cost,
+        attachments: (p.photos || [])
+          .filter(ph => ph.url)
+          .map((ph, i) => ({ id: i, key: ph.url || '', url: ph.url }))
+      })
+    }
     timeline.value = items.sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
     scrollTimelineToBottom()
   } finally {
@@ -233,16 +378,20 @@ async function loadChart(id: number) {
   }
 }
 
-watch(q, () => { loadList() })
+watch(q, () => { if (!props.mobileChart) loadList() })
 watch(patientId, (id) => {
+  mobileView.value = 'timeline'
   if (id) loadChart(id)
   else {
     client.value = null
     timeline.value = []
+    profileStats.value = { visits: 0, activeRx: 0, totalBilling: 0, paid: 0 }
   }
 }, { immediate: true })
 
-onMounted(loadList)
+onMounted(() => {
+  if (!props.mobileChart) void loadList()
+})
 
 async function toggleCheckin() {
   if (!client.value) return
@@ -255,8 +404,8 @@ async function toggleCheckin() {
     )
     client.value.check_in_status = data.check_in_status
     client.value.checked_in_at = data.checked_in_at
-    await loadList()
-    refreshBadges()
+    if (!props.mobileChart) await loadList()
+    bumpBadges()
     toast.add({ title: data.check_in_status ? 'Checked in' : 'Checked out', color: 'success' })
   } catch (e: unknown) {
     toast.add({ title: e instanceof Error ? e.message : 'Failed', color: 'error' })
@@ -414,14 +563,15 @@ async function removeAttachment(item: TimelineItem, att: NoteAttachment) {
 }
 
 function kindColor(kind: TimelineItem['kind']) {
-  const map = {
+  const map: Record<TimelineItem['kind'], string> = {
     note: 'border-l-[#0097A7]',
     bill: 'border-l-amber-500',
     receipt: 'border-l-emerald-500',
     rx: 'border-l-violet-500',
     appointment: 'border-l-sky-500',
     task: 'border-l-slate-400',
-    lab: 'border-l-orange-500'
+    lab: 'border-l-orange-500',
+    plan: 'border-l-teal-600'
   }
   return map[kind]
 }
@@ -432,8 +582,30 @@ function openLabCase(item: TimelineItem) {
   labDetailOpen.value = true
 }
 
-function onPlanComingSoon() {
-  toast.add({ title: 'Treatment plans coming soon', color: 'warning' })
+function openPlanCreate() {
+  planEditId.value = null
+  planCreateOpen.value = true
+}
+
+function openPlanView(item: TimelineItem) {
+  if (!item.planId) return
+  planViewId.value = item.planId
+  planViewOpen.value = true
+}
+
+function openPlanEdit(planId: number) {
+  planEditId.value = planId
+  planCreateOpen.value = true
+}
+
+function openPlanPricing(planId: number) {
+  planPricingId.value = planId
+  planPricingOpen.value = true
+}
+
+function onPlanTimelineClick(item: TimelineItem) {
+  if (item.kind === 'lab') openLabCase(item)
+  else if (item.kind === 'plan') openPlanView(item)
 }
 
 async function openRx() {
@@ -605,9 +777,12 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
 
 <template>
   <div class="relative h-full min-h-0 w-full overflow-hidden">
-    <div class="grid h-full min-h-0 w-full grid-cols-[320px_minmax(0,1fr)] overflow-hidden">
+    <div
+      class="grid h-full min-h-0 w-full overflow-hidden"
+      :class="mobileChart ? 'grid-cols-1' : 'grid-cols-[320px_minmax(0,1fr)]'"
+    >
       <!-- List -->
-      <div class="flex h-full min-h-0 flex-col overflow-hidden border-r border-slate-200 bg-white">
+      <div v-if="!mobileChart" class="flex h-full min-h-0 flex-col overflow-hidden border-r border-slate-200 bg-white">
         <div class="border-b border-slate-100 p-3">
           <input
             v-model="q"
@@ -656,7 +831,69 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
           Select a patient to open the timeline
         </div>
         <template v-else-if="client">
-          <div class="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4">
+          <!-- Mobile: Next-style chat header -->
+          <template v-if="mobileChart">
+            <header class="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
+              <div class="flex min-w-0 flex-1 items-center gap-3">
+                <button
+                  type="button"
+                  class="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                  :aria-label="mobileView === 'profile' ? 'Back to timeline' : 'Back to patients'"
+                  @click="onMobileBack"
+                >
+                  <UIcon name="i-lucide-arrow-left" class="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  class="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#e0f7fa] text-sm font-semibold text-[#0097A7]"
+                  :title="mobileView === 'profile' ? 'Change photo' : 'Open profile'"
+                  :disabled="mobileView === 'profile' && uploadingPhoto"
+                  @click="mobileView === 'profile' ? photoInput?.click() : openMobileProfile()"
+                >
+                  <img
+                    v-if="client.profile_photo_url"
+                    :src="client.profile_photo_url"
+                    :alt="client.name"
+                    class="h-full w-full object-cover"
+                  >
+                  <span v-else>{{ client.name.charAt(0) }}</span>
+                </button>
+                <input ref="photoInput" type="file" accept="image/*" class="hidden" @change="onPickPhoto">
+                <button
+                  type="button"
+                  class="min-w-0 flex-1 text-left"
+                  :title="mobileView === 'timeline' ? 'Open profile' : undefined"
+                  @click="mobileView === 'timeline' && openMobileProfile()"
+                >
+                  <h1
+                    class="truncate text-[15px] font-semibold"
+                    :class="client.check_in_status ? 'text-[#00838f]' : 'text-[#1C2B35]'"
+                  >
+                    {{ mobileView === 'profile' ? 'Patient profile' : client.name }}
+                  </h1>
+                  <p class="truncate text-xs text-slate-500">
+                    <template v-if="mobileView === 'profile'">{{ client.name }}</template>
+                    <template v-else-if="client.status">{{ client.status }}</template>
+                    <template v-else>Tap for profile</template>
+                  </p>
+                </button>
+              </div>
+              <NuxtLink
+                to="/dashboard"
+                class="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                title="Home"
+                aria-label="Home"
+              >
+                <UIcon name="i-lucide-home" class="h-4 w-4" />
+              </NuxtLink>
+            </header>
+          </template>
+
+          <!-- Desk chart header -->
+          <div
+            v-else
+            class="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4"
+          >
             <div class="flex items-center gap-3">
               <button
                 type="button"
@@ -680,7 +917,9 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
               <div>
                 <div class="flex items-center gap-2">
                   <h2 class="text-xl font-semibold text-[#1C2B35]">{{ client.name }}</h2>
-                  <button type="button" class="text-xs text-slate-400 hover:text-slate-600" @click="clearPatient">Close</button>
+                  <button type="button" class="text-xs text-slate-400 hover:text-slate-600" @click="clearPatient">
+                    Close
+                  </button>
                 </div>
                 <p class="mt-1 text-sm text-slate-500">
                   {{ client.number || 'No phone' }}
@@ -710,80 +949,233 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
             </div>
           </div>
 
-          <div ref="timelineEl" class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            <p v-if="loadingChart" class="text-sm text-slate-400">Loading timeline…</p>
-            <ul v-else class="space-y-3">
-              <li
-                v-for="item in timeline"
-                :key="item.id"
-              >
-                <!-- Note bubble -->
-                <div
-                  v-if="item.kind === 'note'"
-                  class="ml-auto max-w-[min(100%,28rem)] rounded-2xl rounded-br-md bg-[#0097A7] px-4 py-3 text-white shadow-sm"
-                >
-                  <p v-if="item.body" class="whitespace-pre-wrap text-sm leading-relaxed">{{ item.body }}</p>
-                  <div v-if="item.attachments?.length" class="mt-2 flex flex-wrap gap-2">
-                    <div
-                      v-for="(att, idx) in item.attachments"
-                      :key="att.id ?? `${item.id}-a-${idx}`"
-                      class="group relative"
+          <!-- Mobile lite profile (name/photo tap) -->
+          <template v-if="mobileChart && mobileView === 'profile'">
+            <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#F0F4F8]">
+              <div class="border-b border-slate-200 bg-white px-4 pb-4 pt-5">
+                <div class="mb-3.5 flex items-center gap-3.5">
+                  <button
+                    type="button"
+                    class="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#e0f7fa] text-xl font-semibold text-[#0097A7] ring-2 ring-[#e0f7fa]"
+                    title="Change photo"
+                    :disabled="uploadingPhoto"
+                    @click="photoInput?.click()"
+                  >
+                    <img
+                      v-if="client.profile_photo_url"
+                      :src="client.profile_photo_url"
+                      :alt="client.name"
+                      class="h-full w-full object-cover"
                     >
-                      <button
-                        v-if="att.url && isImageAtt(att)"
-                        type="button"
-                        class="block overflow-hidden rounded-lg border border-white/30"
-                        @click="lightbox = att.url"
-                      >
-                        <img :src="att.url" alt="" class="h-20 w-20 object-cover">
-                      </button>
-                      <a
-                        v-else-if="att.url"
-                        :href="att.url"
-                        target="_blank"
-                        rel="noopener"
-                        class="inline-block rounded bg-white/15 px-2 py-1 text-[11px] text-white underline"
-                      >
-                        {{ fileLabel(att.key) }}
-                      </a>
-                      <button
-                        v-if="att.id != null"
-                        type="button"
-                        class="absolute -right-1 -top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-black/70 text-[10px] text-white group-hover:flex"
-                        :disabled="removingAttach === `${item.noteId}-${att.id}`"
-                        title="Remove"
-                        @click.stop="removeAttachment(item, att)"
-                      >
-                        ×
-                      </button>
-                    </div>
+                    <span v-else>{{ client.name.charAt(0) }}</span>
+                  </button>
+                  <div class="min-w-0 flex-1">
+                    <h2 class="truncate text-lg font-semibold text-[#1C2B35]">{{ client.name }}</h2>
+                    <p class="mt-0.5 text-[13px] text-slate-500">
+                      <template v-if="client.age != null">{{ client.age }} y · </template>
+                      <template v-if="client.gender">{{ client.gender }} · </template>
+                      {{ client.place || '—' }}
+                    </p>
+                    <p class="mt-1 text-xs text-slate-400">
+                      #{{ client.client_id }}
+                      <span v-if="client.check_in_status" class="ml-2 font-semibold text-[#00838f]">Checked in</span>
+                    </p>
                   </div>
-                  <p class="mt-2 text-right text-[11px] text-white/75">
-                    <span v-if="item.author">{{ item.author }} · </span>{{ formatWhen(item.at) }}
-                  </p>
                 </div>
 
-                <!-- Compact other events -->
-                <div
-                  v-else
-                  class="rounded-lg border border-slate-200 border-l-4 bg-white px-3 py-2"
-                  :class="[kindColor(item.kind), item.kind === 'lab' ? 'cursor-pointer hover:bg-orange-50/40' : '']"
-                  @click="item.kind === 'lab' ? openLabCase(item) : undefined"
-                >
-                  <div class="flex items-center justify-between gap-2">
-                    <p class="text-sm font-medium text-[#1C2B35]">{{ item.title }}</p>
-                    <p class="shrink-0 text-[11px] text-slate-400">{{ formatWhen(item.at) }}</p>
-                  </div>
-                  <p v-if="item.body" class="mt-0.5 truncate text-xs text-slate-500">{{ item.body }}</p>
+                <p class="text-sm text-slate-600">
+                  {{ client.number || 'No phone' }}
+                  <span v-if="client.status" class="text-slate-400"> · {{ client.status }}</span>
+                </p>
+                <p v-if="client.client_personal_note" class="mt-2 text-sm text-slate-500">
+                  {{ client.client_personal_note }}
+                </p>
+
+                <div class="mt-3.5 grid grid-cols-3 gap-2">
+                  <a
+                    :href="telHref || undefined"
+                    class="flex flex-col items-center gap-1 rounded-[10px] bg-[#e0f7fa] px-1.5 py-2.5 no-underline"
+                    :class="!telHref ? 'pointer-events-none opacity-50' : ''"
+                  >
+                    <UIcon name="i-lucide-phone" class="h-5 w-5 text-[#00838f]" />
+                    <span class="text-[11px] font-medium text-[#00838f]">Call</span>
+                  </a>
+                  <a
+                    :href="waHref || undefined"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="flex flex-col items-center gap-1 rounded-[10px] bg-[#dcfce7] px-1.5 py-2.5 no-underline"
+                    :class="!waHref ? 'pointer-events-none opacity-50' : ''"
+                  >
+                    <UIcon name="i-lucide-message-circle" class="h-5 w-5 text-[#15803d]" />
+                    <span class="text-[11px] font-medium text-[#15803d]">WhatsApp</span>
+                  </a>
+                  <button
+                    type="button"
+                    class="flex flex-col items-center gap-1 rounded-[10px] bg-[#fef9ec] px-1.5 py-2.5"
+                    @click="bookOpen = true"
+                  >
+                    <UIcon name="i-lucide-calendar" class="h-5 w-5 text-[#b8860b]" />
+                    <span class="text-[11px] font-medium text-[#b8860b]">Book</span>
+                  </button>
                 </div>
-              </li>
-              <li v-if="!timeline.length" class="rounded-xl border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-500">
-                No timeline items yet.
-              </li>
-            </ul>
+              </div>
+
+              <div class="mb-2.5 grid grid-cols-3 gap-px bg-slate-200">
+                <div class="bg-white px-3 py-3 text-center">
+                  <p class="m-0 text-xl font-semibold text-[#1C2B35]">{{ profileStats.visits }}</p>
+                  <p class="mt-0.5 text-[11px] text-slate-400">Visits</p>
+                </div>
+                <div class="bg-white px-3 py-3 text-center">
+                  <p class="m-0 text-xl font-semibold text-[#0097A7]">{{ profileStats.activeRx }}</p>
+                  <p class="mt-0.5 text-[11px] text-slate-400">Rx</p>
+                </div>
+                <div class="bg-white px-3 py-3 text-center">
+                  <p class="m-0 text-xl font-semibold text-[#C49A3C]">{{ formatInr(profileStats.totalBilling) }}</p>
+                  <p class="mt-0.5 text-[11px] text-slate-400">Total billing</p>
+                  <p
+                    v-if="profileStats.totalBilling > 0 || profileStats.paid > 0"
+                    class="mt-1 text-[11px] font-semibold"
+                    :class="profileBalance > 0 ? 'text-orange-600' : 'text-green-600'"
+                  >
+                    Due {{ formatInr(profileBalance) }}
+                  </p>
+                </div>
+              </div>
+
+              <div class="mx-2.5 mb-2.5 rounded-xl border border-slate-200 bg-white px-4 py-3.5">
+                <p class="m-0 text-xs font-semibold uppercase tracking-wider text-slate-400">Billing</p>
+                <div class="mt-3 grid grid-cols-2 gap-3">
+                  <div>
+                    <p class="text-[11px] text-slate-400">Billed</p>
+                    <p class="text-sm font-semibold text-[#1C2B35]">{{ formatInr(profileStats.totalBilling) }}</p>
+                  </div>
+                  <div>
+                    <p class="text-[11px] text-slate-400">Paid</p>
+                    <p class="text-sm font-semibold text-[#1C2B35]">{{ formatInr(profileStats.paid) }}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mx-2.5 mb-4 rounded-xl border border-dashed border-slate-300 bg-white/60 px-4 py-3.5">
+                <p class="m-0 text-xs font-semibold uppercase tracking-wider text-slate-400">Warranty</p>
+                <p class="mt-2 text-sm text-slate-400">Add warranty card — coming soon</p>
+              </div>
+            </div>
+
+            <div class="flex shrink-0 gap-2 border-t border-slate-200 bg-white px-3 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
+              <button
+                type="button"
+                class="flex-1 rounded-xl px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                :class="client.check_in_status ? 'bg-red-500 active:bg-red-600' : 'bg-emerald-600 active:bg-emerald-700'"
+                :disabled="toggling"
+                @click="toggleCheckin"
+              >
+                {{ client.check_in_status ? 'Check out' : 'Check in' }}
+              </button>
+              <button
+                type="button"
+                class="flex-1 rounded-xl border border-[#0097A7] bg-[#e0f7fa] px-3 py-2.5 text-sm font-semibold text-[#00838f] active:bg-[#b2ebf2]"
+                @click="bookOpen = true"
+              >
+                Book
+              </button>
+            </div>
+          </template>
+
+          <template v-else>
+          <div class="relative min-h-0 flex-1">
+            <div
+              class="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 rounded-full bg-[#1C2B35]/90 px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap text-white shadow-sm transition-opacity duration-200"
+              :class="showFloatingDate && floatingDateLabel ? 'opacity-100' : 'opacity-0'"
+              aria-hidden="true"
+            >
+              {{ floatingDateLabel }}
+            </div>
+            <div ref="timelineEl" class="h-full overflow-y-auto px-5 py-4" @scroll="onTimelineScroll">
+            <div class="mx-auto w-full max-w-[30rem]">
+              <p v-if="loadingChart" class="text-sm text-slate-400">Loading timeline…</p>
+              <ul v-else class="space-y-3">
+                <li
+                  v-for="{ item, showSep, dateKey: dk } in timelineRows"
+                  :key="item.id"
+                  :data-date="dk"
+                >
+                  <div v-if="showSep" class="py-1 text-center">
+                    <span class="inline-block rounded-lg border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold tracking-wide text-slate-500 shadow-sm">
+                      {{ formatDateSeparator(item.at) }}
+                    </span>
+                  </div>
+                  <!-- Note bubble -->
+                  <div
+                    v-if="item.kind === 'note'"
+                    class="w-full rounded-2xl bg-[#0097A7] px-4 py-3 text-white shadow-sm"
+                  >
+                    <p v-if="item.body" class="whitespace-pre-wrap text-sm leading-relaxed">{{ item.body }}</p>
+                    <div v-if="item.attachments?.length" class="mt-2 flex flex-wrap gap-2">
+                      <div
+                        v-for="(att, idx) in item.attachments"
+                        :key="att.id ?? `${item.id}-a-${idx}`"
+                        class="group relative"
+                      >
+                        <button
+                          v-if="att.url && isImageAtt(att)"
+                          type="button"
+                          class="block overflow-hidden rounded-lg border border-white/30"
+                          @click="lightbox = att.url"
+                        >
+                          <img :src="att.url" alt="" class="h-20 w-20 object-cover">
+                        </button>
+                        <a
+                          v-else-if="att.url"
+                          :href="att.url"
+                          target="_blank"
+                          rel="noopener"
+                          class="inline-block rounded bg-white/15 px-2 py-1 text-[11px] text-white underline"
+                        >
+                          {{ fileLabel(att.key) }}
+                        </a>
+                        <button
+                          v-if="att.id != null"
+                          type="button"
+                          class="absolute -right-1 -top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-black/70 text-[10px] text-white group-hover:flex"
+                          :disabled="removingAttach === `${item.noteId}-${att.id}`"
+                          title="Remove"
+                          @click.stop="removeAttachment(item, att)"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                    <p class="mt-2 text-right text-[11px] text-white/75">
+                      <span v-if="item.author">{{ item.author }} · </span>{{ formatWhen(item.at) }}
+                    </p>
+                  </div>
+
+                  <!-- Compact other events -->
+                  <div
+                    v-else
+                    class="rounded-lg border border-slate-200 border-l-4 bg-white px-3 py-2"
+                    :class="[kindColor(item.kind), (item.kind === 'lab' || item.kind === 'plan') ? 'cursor-pointer hover:bg-slate-50' : '']"
+                    @click="onPlanTimelineClick(item)"
+                  >
+                    <div class="flex items-center justify-between gap-2">
+                      <p class="text-sm font-medium text-[#1C2B35]">{{ item.title }}</p>
+                      <p class="shrink-0 text-[11px] text-slate-400">{{ formatWhen(item.at) }}</p>
+                    </div>
+                    <p v-if="item.body" class="mt-0.5 truncate text-xs text-slate-500">{{ item.body }}</p>
+                  </div>
+                </li>
+                <li v-if="!timeline.length" class="rounded-xl border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-500">
+                  No timeline items yet.
+                </li>
+              </ul>
+            </div>
+            </div>
           </div>
 
           <div class="shrink-0 border-t border-slate-200 bg-white px-4 py-3">
+            <div class="mx-auto w-full max-w-[30rem] space-y-2">
             <form class="space-y-2" @submit.prevent="addNote">
               <input
                 v-if="noteShowDatetime"
@@ -905,7 +1297,7 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                 type="button"
                 class="flex flex-col items-center justify-center gap-0.5 rounded-xl border border-[#0097A7] bg-[#e0f7fa] py-2 text-[#00838f] hover:bg-[#b2ebf2]"
                 title="Treatment plan"
-                @click="onPlanComingSoon"
+                @click="openPlanCreate"
               >
                 <UIcon name="i-lucide-stethoscope" class="h-5 w-5" />
                 <span class="text-[10px] font-semibold">Plan</span>
@@ -920,7 +1312,9 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                 <span class="text-[10px] font-semibold">Lab</span>
               </button>
             </div>
+            </div>
           </div>
+          </template>
         </template>
         <div v-else-if="loadingChart" class="flex flex-1 items-center justify-center text-sm text-slate-400">Loading…</div>
       </div>
@@ -936,13 +1330,31 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
       v-model:open="labCreateOpen"
       :client-id="client?.client_id"
       :client-name="client?.name"
-      @created="() => { client && loadChart(client.client_id).then(() => scrollTimelineToBottom()); refreshBadges() }"
+      @created="() => { client && loadChart(client.client_id).then(() => scrollTimelineToBottom()); bumpBadges() }"
     />
     <DeskLabCaseModal
       v-model:open="labDetailOpen"
       :case-id="labDetailCaseId"
-      @changed="() => { client && loadChart(client.client_id); refreshBadges() }"
+      @changed="() => { client && loadChart(client.client_id); bumpBadges() }"
       @book="(p) => { bookOpen = true }"
+    />
+    <DeskPlanCreateModal
+      v-model:open="planCreateOpen"
+      :client-id="client?.client_id ?? null"
+      :plan-id="planEditId"
+      @saved="() => { client && loadChart(client.client_id).then(() => scrollTimelineToBottom()) }"
+    />
+    <DeskPlanViewModal
+      v-model:open="planViewOpen"
+      :plan-id="planViewId"
+      @edit="openPlanEdit"
+      @pricing="openPlanPricing"
+      @deleted="() => { client && loadChart(client.client_id) }"
+    />
+    <DeskPlanPricingModal
+      v-model:open="planPricingOpen"
+      :plan-id="planPricingId"
+      @saved="() => { client && loadChart(client.client_id) }"
     />
 
     <UModal v-model:open="rxOpen" title="New prescription">

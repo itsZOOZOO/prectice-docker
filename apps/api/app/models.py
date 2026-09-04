@@ -409,3 +409,97 @@ class LabCaseCycle(Base):
     case: Mapped[LabCase] = relationship(back_populates="cycles")
 
     __table_args__ = (UniqueConstraint("case_id", "cycle_number", name="uq_lab_case_cycles_case_number"),)
+
+
+class Treatment(Base):
+    __tablename__ = "treatments"
+
+    treatment_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    short_explainer: Mapped[str | None] = mapped_column(Text)
+    default_appts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    price_options: Mapped[list[PriceOption]] = relationship(
+        back_populates="treatment", cascade="all, delete-orphan"
+    )
+
+
+class PriceOption(Base):
+    __tablename__ = "price_options"
+
+    price_option_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    treatment_id: Mapped[int] = mapped_column(ForeignKey("treatments.treatment_id"), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    explainer: Mapped[str | None] = mapped_column(Text)
+    is_foc: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    treatment: Mapped[Treatment] = relationship(back_populates="price_options")
+
+
+class TreatmentPlan(Base):
+    __tablename__ = "treatment_plans"
+
+    plan_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.client_id"), nullable=False, index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    title: Mapped[str | None] = mapped_column(String(255))
+    notes: Mapped[str | None] = mapped_column(Text)
+    visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+
+    sub_plans: Mapped[list[TreatmentSubPlan]] = relationship(
+        back_populates="plan",
+        cascade="all, delete-orphan",
+        order_by="TreatmentSubPlan.sub_plan_id",
+    )
+
+
+class TreatmentSubPlan(Base):
+    __tablename__ = "treatment_sub_plans"
+
+    sub_plan_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("treatment_plans.plan_id"), nullable=False, index=True)
+    treatment_id: Mapped[int] = mapped_column(ForeignKey("treatments.treatment_id"), nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String(20), default="Definitive", nullable=False)  # Definitive | Tentative
+    complaint_text: Mapped[str | None] = mapped_column(Text)
+    location_text: Mapped[str | None] = mapped_column(String(255))
+    tooth_fdi: Mapped[str | None] = mapped_column(String(64))
+    qty: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    chosen_price_option_id: Mapped[int | None] = mapped_column(
+        ForeignKey("price_options.price_option_id"), index=True
+    )
+    is_foc: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    plan: Mapped[TreatmentPlan] = relationship(back_populates="sub_plans")
+    treatment: Mapped[Treatment] = relationship()
+    chosen_price_option: Mapped[PriceOption | None] = relationship()
+    photos: Mapped[list[TreatmentSubPlanPhoto]] = relationship(
+        back_populates="sub_plan",
+        cascade="all, delete-orphan",
+        order_by="TreatmentSubPlanPhoto.photo_id",
+    )
+
+
+class TreatmentSubPlanPhoto(Base):
+    __tablename__ = "treatment_sub_plan_photos"
+
+    photo_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sub_plan_id: Mapped[int] = mapped_column(
+        ForeignKey("treatment_sub_plans.sub_plan_id"), nullable=False, index=True
+    )
+    photo_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    sub_plan: Mapped[TreatmentSubPlan] = relationship(back_populates="photos")
+

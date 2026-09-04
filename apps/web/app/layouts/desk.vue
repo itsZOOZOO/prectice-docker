@@ -4,6 +4,15 @@ hydrate()
 
 const { view, title, setView, openPatient, patientId } = useDeskUrl()
 const { api } = useApi()
+const { isDesktop } = useDeviceHome()
+const preferMobileView = computed(() => !isDesktop.value)
+const mismatchAttention = useViewMismatchAttention(preferMobileView)
+const mobileSwitchClass = computed(() => viewSwitchClass(preferMobileView.value, mismatchAttention.value))
+const mobileSwitchTitle = computed(() =>
+  preferMobileView.value
+    ? 'Narrow screen detected — switch to Mobile App'
+    : 'Switch to Mobile App'
+)
 
 const collapsed = ref(false)
 const search = ref('')
@@ -185,7 +194,20 @@ useSeoMeta({ title: title })
           </button>
         </nav>
 
-        <div class="border-t border-slate-100" :class="collapsed ? 'p-2' : 'p-4'">
+        <div class="border-t border-slate-100 space-y-2" :class="collapsed ? 'p-2' : 'p-4'">
+          <NuxtLink
+            to="/dashboard"
+            :title="mobileSwitchTitle"
+            :aria-label="mobileSwitchTitle"
+            class="flex w-full items-center rounded-lg border text-sm font-medium transition"
+            :class="[
+              collapsed ? 'justify-center px-2 py-2' : 'justify-center gap-2 px-3 py-2',
+              mobileSwitchClass
+            ]"
+          >
+            <span aria-hidden>{{ collapsed ? '📱' : '←' }}</span>
+            <span v-if="!collapsed">Mobile App</span>
+          </NuxtLink>
           <button
             type="button"
             class="flex w-full items-center justify-center rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50"

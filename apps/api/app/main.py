@@ -5,7 +5,19 @@ from sqlalchemy import text
 
 from app.config import get_settings
 from app.db import Base, engine
-from app.routers import appointments, auth, billing, clients, desk, labs, media, prescriptions, settings, tasks
+from app.routers import (
+    appointments,
+    auth,
+    billing,
+    clients,
+    desk,
+    labs,
+    media,
+    prescriptions,
+    settings,
+    tasks,
+    treatment_plans,
+)
 
 settings_cfg = get_settings()
 
@@ -28,6 +40,7 @@ app.include_router(tasks.router, prefix="/api")
 app.include_router(desk.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(labs.router, prefix="/api")
+app.include_router(treatment_plans.router, prefix="/api")
 app.include_router(media.router, prefix="/api")
 
 

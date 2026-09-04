@@ -76,3 +76,50 @@ body {
   min-height: 0;
   overflow: hidden;
 }
+
+/* Attention pulse for mismatched mobile/desktop view (finite; driven by JS). */
+@keyframes view-mismatch-beam {
+  0%,
+  100% {
+    background-color: #0097a7;
+    border-color: #007c8a;
+    color: #ffffff;
+    box-shadow:
+      0 0 0 0 rgba(0, 151, 167, 0.45),
+      0 0 10px rgba(0, 151, 167, 0.4);
+    transform: scale(1);
+  }
+  50% {
+    background-color: #f59e0b;
+    border-color: #d97706;
+    color: #ffffff;
+    box-shadow:
+      0 0 0 6px rgba(245, 158, 11, 0.22),
+      0 0 16px rgba(245, 158, 11, 0.45);
+    transform: scale(1.04);
+  }
+}
+
+.view-mismatch-beam {
+  animation: view-mismatch-beam 1.25s ease-in-out infinite;
+  border-color: #0097a7 !important;
+  background-color: #0097a7 !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+}
+
+.view-mismatch-rest {
+  border-color: #0097a7 !important;
+  background-color: #e0f7fa !important;
+  color: #0097a7 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-mismatch-beam {
+    animation: none;
+    background-color: #f59e0b !important;
+    border-color: #d97706 !important;
+    color: #ffffff !important;
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.35);
+  }
+}
