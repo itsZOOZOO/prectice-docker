@@ -10,6 +10,7 @@ const { view } = useDeskUrl()
     <DeskPatientsPanel v-else-if="view === 'patients'" />
     <DeskCalendarPanel v-else-if="view === 'calendar'" />
     <DeskTasksPanel v-else-if="view === 'tasks'" />
+    <DeskLabPanel v-else-if="view === 'lab'" />
     <DeskSettingsPanel v-else-if="view === 'settings'" />
   </div>
 </template>

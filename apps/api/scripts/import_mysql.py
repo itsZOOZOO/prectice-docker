@@ -40,7 +40,10 @@ from app.models import (
     ClientCheckinLog,
     Clinic,
     ClinicSetting,
+    DentalLab,
     DoctorSchedule,
+    LabCase,
+    LabCaseCycle,
     MedicineTemplate,
     MoneyReceipt,
     Note,
@@ -134,6 +137,9 @@ def _reset_sequences(db) -> None:
         ("prescriptions", "prescription_id"),
         ("prescription_items", "item_id"),
         ("tasks", "task_id"),
+        ("dental_labs", "lab_id"),
+        ("lab_cases", "case_id"),
+        ("lab_case_cycles", "cycle_id"),
     ]
     for table, col in tables:
         db.execute(
@@ -146,7 +152,15 @@ def _reset_sequences(db) -> None:
 
 def _wipe_clinic(db, clinic_id: int) -> None:
     # FK-safe order
+    case_ids = [
+        r[0]
+        for r in db.query(LabCase.case_id).filter(LabCase.clinic_id == clinic_id).all()
+    ]
+    if case_ids:
+        db.query(LabCaseCycle).filter(LabCaseCycle.case_id.in_(case_ids)).delete(synchronize_session=False)
     tables = [
+        LabCase,
+        DentalLab,
         PrescriptionItem,
         Prescription,
         MoneyReceipt,
@@ -643,6 +657,103 @@ def import_clinic(*, clinic_id: int, replace: bool, dry_run: bool, keep_admin: b
                         task = db.get(Task, row["task_id"])
                         if task and task.assignee_id is None:
                             task.assignee_id = row["user_id"]
+
+            # Dental labs + cases + cycles
+            try:
+                cur.execute(
+                    "SELECT * FROM dental_labs WHERE clinic_id=%s ORDER BY lab_id",
+                    (clinic_id,),
+                )
+                labs = cur.fetchall()
+            except Exception:
+                labs = []
+            stats["dental_labs"] = len(labs)
+            if not dry_run:
+                for lab in labs:
+                    db.add(
+                        DentalLab(
+                            lab_id=lab["lab_id"],
+                            clinic_id=clinic_id,
+                            name=lab["name"],
+                            contact_person=lab.get("contact_person"),
+                            phone=lab.get("phone"),
+                            notes=lab.get("notes"),
+                            visible=_as_bool(lab.get("visible", 1)),
+                            created_by=lab.get("created_by"),
+                            created_at=lab.get("created_at") or datetime.now(timezone.utc),
+                            updated_at=lab.get("updated_at"),
+                        )
+                    )
+                db.flush()
+
+            try:
+                cur.execute(
+                    "SELECT * FROM lab_cases WHERE clinic_id=%s ORDER BY case_id",
+                    (clinic_id,),
+                )
+                cases = cur.fetchall()
+            except Exception:
+                cases = []
+            stats["lab_cases"] = len(cases)
+            if not dry_run:
+                for lc in cases:
+                    db.add(
+                        LabCase(
+                            case_id=lc["case_id"],
+                            clinic_id=clinic_id,
+                            client_id=lc["client_id"],
+                            lab_id=lc["lab_id"],
+                            case_ref=lc["case_ref"],
+                            case_type=lc.get("case_type"),
+                            tooth_numbers=lc.get("tooth_numbers"),
+                            description=lc.get("description"),
+                            current_cycle_number=int(lc.get("current_cycle_number") or 1),
+                            status=lc.get("status") or "open",
+                            created_by=lc.get("created_by"),
+                            closed_at=lc.get("closed_at"),
+                            closed_by=lc.get("closed_by"),
+                            visible=_as_bool(lc.get("visible", 1)),
+                            created_at=lc.get("created_at") or datetime.now(timezone.utc),
+                            updated_at=lc.get("updated_at"),
+                        )
+                    )
+                db.flush()
+
+            try:
+                if cases:
+                    case_ids = [c["case_id"] for c in cases]
+                    fmt = ",".join(["%s"] * len(case_ids))
+                    cur.execute(
+                        f"SELECT * FROM lab_case_cycles WHERE case_id IN ({fmt}) ORDER BY cycle_id",
+                        case_ids,
+                    )
+                    cycles = cur.fetchall()
+                else:
+                    cycles = []
+            except Exception:
+                cycles = []
+            stats["lab_case_cycles"] = len(cycles)
+            if not dry_run:
+                for cy in cycles:
+                    db.add(
+                        LabCaseCycle(
+                            cycle_id=cy["cycle_id"],
+                            case_id=cy["case_id"],
+                            cycle_number=int(cy["cycle_number"]),
+                            send_pending_at=cy.get("send_pending_at"),
+                            send_pending_by=cy.get("send_pending_by"),
+                            sent_at=cy.get("sent_at"),
+                            sent_by=cy.get("sent_by"),
+                            receive_pending_at=cy.get("receive_pending_at"),
+                            receive_pending_by=cy.get("receive_pending_by"),
+                            received_at=cy.get("received_at"),
+                            received_by=cy.get("received_by"),
+                            expected_return_date=cy.get("expected_return_date"),
+                            notes=cy.get("notes"),
+                            created_at=cy.get("created_at") or datetime.now(timezone.utc),
+                            updated_at=cy.get("updated_at"),
+                        )
+                    )
 
             # check-in logs (optional / lighter mapping)
             cur.execute(

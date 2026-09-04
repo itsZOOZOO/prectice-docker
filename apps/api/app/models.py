@@ -340,3 +340,72 @@ class Task(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DentalLab(Base):
+    __tablename__ = "dental_labs"
+
+    lab_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    contact_person: Mapped[str | None] = mapped_column(String(255))
+    phone: Mapped[str | None] = mapped_column(String(32))
+    notes: Mapped[str | None] = mapped_column(Text)
+    visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+
+    cases: Mapped[list[LabCase]] = relationship(back_populates="lab")
+
+
+class LabCase(Base):
+    __tablename__ = "lab_cases"
+
+    case_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.client_id"), nullable=False, index=True)
+    lab_id: Mapped[int] = mapped_column(ForeignKey("dental_labs.lab_id"), nullable=False, index=True)
+    case_ref: Mapped[str] = mapped_column(String(32), nullable=False)
+    case_type: Mapped[str | None] = mapped_column(String(128))
+    tooth_numbers: Mapped[str | None] = mapped_column(String(64))
+    description: Mapped[str | None] = mapped_column(Text)
+    current_cycle_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="open", nullable=False)  # open | closed | cancelled
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_by: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+
+    lab: Mapped[DentalLab] = relationship(back_populates="cases")
+    cycles: Mapped[list[LabCaseCycle]] = relationship(
+        back_populates="case", cascade="all, delete-orphan", order_by="LabCaseCycle.cycle_number"
+    )
+
+    __table_args__ = (UniqueConstraint("clinic_id", "case_ref", name="uq_lab_cases_clinic_ref"),)
+
+
+class LabCaseCycle(Base):
+    __tablename__ = "lab_case_cycles"
+
+    cycle_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("lab_cases.case_id"), nullable=False, index=True)
+    cycle_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    send_pending_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    send_pending_by: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_by: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    receive_pending_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    receive_pending_by: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    received_by: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    expected_return_date: Mapped[date | None] = mapped_column(Date)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+
+    case: Mapped[LabCase] = relationship(back_populates="cycles")
+
+    __table_args__ = (UniqueConstraint("case_id", "cycle_number", name="uq_lab_case_cycles_case_number"),)

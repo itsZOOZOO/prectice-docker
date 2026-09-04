@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.db import get_db
+from app import labs as lab_svc
 from app.models import Appointment, Clinic, Client, MoneyReceipt, Task, User
 from app.routers.appointments import _enrich_many
 from app.schemas import ClinicOut, OkResponse
@@ -68,6 +69,7 @@ def desk_summary(
         .filter(Task.clinic_id == user.clinic_id, Task.visible.is_(True), Task.status == "Open")
         .count()
     )
+    lab_counts = lab_svc.summary_counts(db, user.clinic_id)
     return OkResponse(
         data={
             "clinic": ClinicOut.model_validate(clinic).model_dump() if clinic else None,
@@ -77,6 +79,7 @@ def desk_summary(
             "receipts_today_total": receipts_total,
             "receipts_today_count": len(receipts),
             "open_tasks": open_tasks,
+            "lab_action_needed": lab_counts["action_needed"],
             "today": today.isoformat(),
         }
     )

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
+from app.datetime_local import parse_clinic_local_datetime
 from app.db import get_db
 from app.models import Bill, Client, MoneyReceipt, User
 from app.schemas import (
@@ -17,6 +18,16 @@ from app.schemas import (
     ReceiptCreate,
     ReceiptOut,
 )
+
+
+def _optional_clinic_datetime(value: str | None):
+    try:
+        return parse_clinic_local_datetime(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid datetime: {value}",
+        ) from exc
 
 router = APIRouter(tags=["billing"])
 
@@ -70,6 +81,7 @@ def create_bill(
     db: Annotated[Session, Depends(get_db)],
 ) -> OkResponse:
     _client(db, user.clinic_id, client_id)
+    issued_at = _optional_clinic_datetime(body.issued_datetime)
     bill = Bill(
         clinic_id=user.clinic_id,
         client_id=client_id,
@@ -77,6 +89,7 @@ def create_bill(
         status="open",
         description=body.description,
         user_id=user.user_id,
+        **({"issued_at": issued_at} if issued_at else {}),
     )
     db.add(bill)
     db.commit()

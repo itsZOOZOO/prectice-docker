@@ -1,13 +1,34 @@
-export type DeskView = 'dashboard' | 'patients' | 'calendar' | 'tasks' | 'settings'
+export type DeskView = 'dashboard' | 'patients' | 'calendar' | 'tasks' | 'lab' | 'settings'
 export type CalMode = 'day' | 'month'
+export type LabFilter =
+  | 'action_needed'
+  | 'blocked_on_clinic'
+  | 'at_lab'
+  | 'at_lab_overdue'
+  | 'received_no_future_appointment'
+  | 'open'
+  | 'closed'
+  | 'cancelled'
 
 const VIEW_TITLES: Record<DeskView, string> = {
   dashboard: 'Dashboard',
   patients: 'Patients',
   calendar: 'Calendar',
   tasks: 'Tasks',
+  lab: 'Lab',
   settings: 'Settings'
 }
+
+const LAB_FILTERS = new Set<LabFilter>([
+  'action_needed',
+  'blocked_on_clinic',
+  'at_lab',
+  'at_lab_overdue',
+  'received_no_future_appointment',
+  'open',
+  'closed',
+  'cancelled'
+])
 
 function todayISO() {
   const d = new Date()
@@ -22,7 +43,16 @@ export function useDeskUrl() {
 
   const view = computed<DeskView>(() => {
     const v = route.query.view
-    if (v === 'patients' || v === 'calendar' || v === 'tasks' || v === 'dashboard' || v === 'settings') return v
+    if (
+      v === 'patients'
+      || v === 'calendar'
+      || v === 'tasks'
+      || v === 'lab'
+      || v === 'dashboard'
+      || v === 'settings'
+    ) {
+      return v
+    }
     return 'dashboard'
   })
 
@@ -44,6 +74,12 @@ export function useDeskUrl() {
     return todayISO()
   })
 
+  const labFilter = computed<LabFilter>(() => {
+    const raw = route.query.labFilter
+    if (typeof raw === 'string' && LAB_FILTERS.has(raw as LabFilter)) return raw as LabFilter
+    return 'action_needed'
+  })
+
   const title = computed(() => VIEW_TITLES[view.value])
 
   function buildHref(opts: {
@@ -51,6 +87,7 @@ export function useDeskUrl() {
     patientId?: number | null
     cal?: CalMode | null
     date?: string | null
+    labFilter?: LabFilter | null
   }) {
     const query: Record<string, string> = { view: opts.view }
     if (opts.view === 'patients' && opts.patientId) {
@@ -59,6 +96,9 @@ export function useDeskUrl() {
     if (opts.view === 'calendar') {
       query.cal = opts.cal || 'month'
       query.date = opts.date || todayISO()
+    }
+    if (opts.view === 'lab') {
+      query.labFilter = opts.labFilter || 'action_needed'
     }
     return { path: '/desk', query }
   }
@@ -69,6 +109,13 @@ export function useDeskUrl() {
         view: 'calendar',
         cal: 'month',
         date: todayISO()
+      }))
+      return
+    }
+    if (nextView === 'lab') {
+      await router.push(buildHref({
+        view: 'lab',
+        labFilter: labFilter.value
       }))
       return
     }
@@ -86,6 +133,10 @@ export function useDeskUrl() {
     }))
   }
 
+  async function setLabFilter(next: LabFilter) {
+    await router.push(buildHref({ view: 'lab', labFilter: next }))
+  }
+
   async function openPatient(id: number) {
     await router.push(buildHref({ view: 'patients', patientId: id }))
   }
@@ -99,10 +150,12 @@ export function useDeskUrl() {
     patientId,
     calMode,
     calDate,
+    labFilter,
     title,
     buildHref,
     setView,
     setCalendar,
+    setLabFilter,
     openPatient,
     clearPatient,
     todayISO

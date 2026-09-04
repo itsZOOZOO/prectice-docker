@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.db import get_db
+from app import media as media_svc
 from app.models import (
     Appointment,
     AppointmentDoctor,
@@ -78,6 +79,19 @@ def appointment_meta(
         .order_by(AppointmentDoctor.doctor_name)
         .all()
     )
+    user_ids = {d.user_id for d in doctors if d.user_id}
+    photo_by_user: dict[int, str | None] = {}
+    if user_ids:
+        for u in db.query(User).filter(User.user_id.in_(user_ids)).all():
+            key = (u.profile_photo_url or "").strip() or None
+            photo_by_user[u.user_id] = media_svc.resolve_media_key(key) if key else None
+
+    doctor_rows = []
+    for d in doctors:
+        row = DoctorOut.model_validate(d).model_dump()
+        row["profile_photo_url"] = photo_by_user.get(d.user_id) if d.user_id else None
+        doctor_rows.append(row)
+
     services = (
         db.query(AppointmentService)
         .filter(AppointmentService.clinic_id == user.clinic_id, AppointmentService.is_active.is_(True))
@@ -92,7 +106,7 @@ def appointment_meta(
     )
     return OkResponse(
         data={
-            "doctors": [DoctorOut.model_validate(d).model_dump() for d in doctors],
+            "doctors": doctor_rows,
             "services": [ServiceOut.model_validate(s).model_dump() for s in services],
             "statuses": [StatusOut.model_validate(s).model_dump() for s in statuses],
         }

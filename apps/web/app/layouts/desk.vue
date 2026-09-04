@@ -13,7 +13,7 @@ const searchResults = ref<{ client_id: number, name: string, number: string | nu
 const addOpen = ref(false)
 const bookOpen = ref(false)
 const bookPatient = ref<{ id: number, name: string } | null>(null)
-const badges = ref({ checked_in: 0, appointments_today: 0, open_tasks: 0 })
+const badges = ref({ checked_in: 0, appointments_today: 0, open_tasks: 0, lab_action_needed: 0 })
 const searchTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
 const clinicInitial = computed(() => String(clinicName.value || 'P').charAt(0))
@@ -22,6 +22,7 @@ const nav = [
   { key: 'dashboard' as const, label: 'Dashboard', icon: '▦' },
   { key: 'patients' as const, label: 'Patients', icon: '👥' },
   { key: 'calendar' as const, label: 'Calendar', icon: '📅' },
+  { key: 'lab' as const, label: 'Lab', icon: '🦷' },
   { key: 'tasks' as const, label: 'Tasks', icon: '📋' },
   { key: 'settings' as const, label: 'Settings', icon: '⚙' }
 ]
@@ -46,11 +47,13 @@ async function refreshBadges() {
       checked_in: number
       appointments_today: number
       open_tasks: number
+      lab_action_needed: number
     }>('/desk/summary')
     badges.value = {
       checked_in: s.checked_in,
       appointments_today: s.appointments_today,
-      open_tasks: s.open_tasks
+      open_tasks: s.open_tasks,
+      lab_action_needed: s.lab_action_needed || 0
     }
   } catch { /* ignore */ }
 }
@@ -96,6 +99,7 @@ function badgeFor(key: string) {
   if (key === 'dashboard') return badges.value.checked_in
   if (key === 'calendar') return badges.value.appointments_today
   if (key === 'tasks') return badges.value.open_tasks
+  if (key === 'lab') return badges.value.lab_action_needed
   return 0
 }
 

@@ -6,6 +6,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
+from app.datetime_local import parse_clinic_local_datetime
 from app.db import get_db
 from app import media as media_svc
 from app.models import Client, ClientCheckinLog, Note, NoteAttachment, User
@@ -19,6 +20,16 @@ from app.schemas import (
     NoteOut,
     OkResponse,
 )
+
+
+def _optional_clinic_datetime(value: str | None):
+    try:
+        return parse_clinic_local_datetime(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid datetime: {value}",
+        ) from exc
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -255,6 +266,7 @@ async def create_note(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     body: str = Form(default=""),
+    note_datetime: str | None = Form(default=None),
     files: Annotated[list[UploadFile] | None, File()] = None,
 ) -> OkResponse:
     _get_clinic_client(db, user.clinic_id, client_id)
@@ -268,11 +280,13 @@ async def create_note(
             detail=f"Maximum {media_svc.MAX_NOTE_FILES} files allowed per note",
         )
 
+    created_at = _optional_clinic_datetime(note_datetime)
     note = Note(
         clinic_id=user.clinic_id,
         client_id=client_id,
         user_id=user.user_id,
         body=text,
+        **({"created_at": created_at} if created_at else {}),
     )
     db.add(note)
     db.flush()
@@ -303,11 +317,13 @@ def create_note_json(
 ) -> OkResponse:
     """Text-only note (JSON) — kept for scripts/tools."""
     _get_clinic_client(db, user.clinic_id, client_id)
+    created_at = _optional_clinic_datetime(body.note_datetime)
     note = Note(
         clinic_id=user.clinic_id,
         client_id=client_id,
         user_id=user.user_id,
         body=body.body.strip(),
+        **({"created_at": created_at} if created_at else {}),
     )
     db.add(note)
     db.commit()

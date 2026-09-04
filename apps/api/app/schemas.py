@@ -97,6 +97,7 @@ class ClientOut(BaseModel):
 
 class NoteCreate(BaseModel):
     body: str = Field(min_length=1)
+    note_datetime: str | None = None
 
 
 class NoteAttachmentOut(BaseModel):
@@ -132,6 +133,7 @@ class DoctorOut(BaseModel):
     specialization: str | None = None
     color_code: str | None = None
     is_active: bool
+    profile_photo_url: str | None = None
 
 
 class ServiceOut(BaseModel):
@@ -193,6 +195,7 @@ class AppointmentOut(BaseModel):
 class BillCreate(BaseModel):
     amount_due: float = Field(gt=0)
     description: str | None = None
+    issued_datetime: str | None = None
 
 
 class BillOut(BaseModel):
