@@ -91,10 +91,18 @@ class ClientOut(BaseModel):
     check_in_status: bool
     checked_in_at: datetime | None = None
     created_at: datetime
+    profile_photo_url: str | None = None
+    profile_photo_key: str | None = None
 
 
 class NoteCreate(BaseModel):
     body: str = Field(min_length=1)
+
+
+class NoteAttachmentOut(BaseModel):
+    id: int | None = None
+    key: str
+    url: str | None = None
 
 
 class NoteOut(BaseModel):
@@ -107,6 +115,7 @@ class NoteOut(BaseModel):
     body: str
     created_at: datetime
     author_name: str | None = None
+    attachments: list[NoteAttachmentOut] = []
 
 
 class CheckinOut(BaseModel):

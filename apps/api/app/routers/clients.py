@@ -1,18 +1,20 @@
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.db import get_db
-from app.models import Client, ClientCheckinLog, Note, User
+from app import media as media_svc
+from app.models import Client, ClientCheckinLog, Note, NoteAttachment, User
 from app.schemas import (
     CheckinOut,
     ClientCreate,
     ClientOut,
     ClientUpdate,
+    NoteAttachmentOut,
     NoteCreate,
     NoteOut,
     OkResponse,
@@ -28,11 +30,48 @@ def _author_name(user: User | None) -> str | None:
     return name or user.username
 
 
-def _serialize_note(db: Session, note: Note) -> dict:
-    data = NoteOut.model_validate(note).model_dump()
-    author = db.get(User, note.user_id) if note.user_id else None
-    data["author_name"] = _author_name(author)
+def _serialize_client(client: Client) -> dict:
+    data = ClientOut.model_validate(client).model_dump()
+    key = (client.profile_photo_url or "").strip() or None
+    data["profile_photo_key"] = key
+    data["profile_photo_url"] = media_svc.resolve_media_key(key) if key else None
     return data
+
+
+def _note_attachment_keys(db: Session, note: Note) -> list[tuple[int | None, str]]:
+    rows = (
+        db.query(NoteAttachment)
+        .filter(NoteAttachment.note_id == note.note_id)
+        .order_by(NoteAttachment.id.asc())
+        .all()
+    )
+    items: list[tuple[int | None, str]] = [(r.id, r.attachment_url) for r in rows if r.attachment_url]
+    if not items and note.attachment_url:
+        items.append((None, note.attachment_url))
+    return items
+
+
+def _serialize_note(db: Session, note: Note) -> dict:
+    author = db.get(User, note.user_id) if note.user_id else None
+    attachments: list[dict] = []
+    for attach_id, key in _note_attachment_keys(db, note):
+        attachments.append(
+            NoteAttachmentOut(
+                id=attach_id,
+                key=key,
+                url=media_svc.resolve_media_key(key),
+            ).model_dump()
+        )
+    return NoteOut(
+        note_id=note.note_id,
+        clinic_id=note.clinic_id,
+        client_id=note.client_id,
+        user_id=note.user_id,
+        body=note.body or "",
+        created_at=note.created_at,
+        author_name=_author_name(author),
+        attachments=attachments,
+    ).model_dump()
 
 
 def _get_clinic_client(db: Session, clinic_id: int, client_id: int) -> Client:
@@ -73,7 +112,7 @@ def list_clients(
     return OkResponse(
         data={
             "total": total,
-            "items": [ClientOut.model_validate(r).model_dump() for r in rows],
+            "items": [_serialize_client(r) for r in rows],
         }
     )
 
@@ -103,7 +142,7 @@ def create_client(
     db.add(client)
     db.commit()
     db.refresh(client)
-    return OkResponse(data=ClientOut.model_validate(client).model_dump())
+    return OkResponse(data=_serialize_client(client))
 
 
 @router.get("/{client_id}", response_model=OkResponse)
@@ -113,7 +152,7 @@ def get_client(
     db: Annotated[Session, Depends(get_db)],
 ) -> OkResponse:
     client = _get_clinic_client(db, user.clinic_id, client_id)
-    return OkResponse(data=ClientOut.model_validate(client).model_dump())
+    return OkResponse(data=_serialize_client(client))
 
 
 @router.patch("/{client_id}", response_model=OkResponse)
@@ -130,7 +169,7 @@ def update_client(
         setattr(client, key, value)
     db.commit()
     db.refresh(client)
-    return OkResponse(data=ClientOut.model_validate(client).model_dump())
+    return OkResponse(data=_serialize_client(client))
 
 
 @router.post("/{client_id}/check-in", response_model=OkResponse)
@@ -211,12 +250,58 @@ def list_notes(
 
 
 @router.post("/{client_id}/notes", response_model=OkResponse, status_code=status.HTTP_201_CREATED)
-def create_note(
+async def create_note(
+    client_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    body: str = Form(default=""),
+    files: Annotated[list[UploadFile] | None, File()] = None,
+) -> OkResponse:
+    _get_clinic_client(db, user.clinic_id, client_id)
+    text = (body or "").strip()
+    uploads = [f for f in (files or []) if f is not None and f.filename]
+    if not text and not uploads:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Note text or attachment is required")
+    if len(uploads) > media_svc.MAX_NOTE_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Maximum {media_svc.MAX_NOTE_FILES} files allowed per note",
+        )
+
+    note = Note(
+        clinic_id=user.clinic_id,
+        client_id=client_id,
+        user_id=user.user_id,
+        body=text,
+    )
+    db.add(note)
+    db.flush()
+
+    for i, upload in enumerate(uploads):
+        raw = await upload.read()
+        mime = media_svc.validate_note_file(upload.content_type, len(raw), upload.filename or "file")
+        key = media_svc.upload_bytes(raw, filename=upload.filename or "file", content_type=mime, index=i)
+        db.add(
+            NoteAttachment(
+                note_id=note.note_id,
+                clinic_id=user.clinic_id,
+                attachment_url=key,
+            )
+        )
+
+    db.commit()
+    db.refresh(note)
+    return OkResponse(data=_serialize_note(db, note))
+
+
+@router.post("/{client_id}/notes/json", response_model=OkResponse, status_code=status.HTTP_201_CREATED)
+def create_note_json(
     client_id: int,
     body: NoteCreate,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> OkResponse:
+    """Text-only note (JSON) — kept for scripts/tools."""
     _get_clinic_client(db, user.clinic_id, client_id)
     note = Note(
         clinic_id=user.clinic_id,
@@ -228,3 +313,64 @@ def create_note(
     db.commit()
     db.refresh(note)
     return OkResponse(data=_serialize_note(db, note))
+
+
+@router.delete("/{client_id}/notes/{note_id}/attachments/{attachment_id}", response_model=OkResponse)
+def delete_note_attachment(
+    client_id: int,
+    note_id: int,
+    attachment_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    _get_clinic_client(db, user.clinic_id, client_id)
+    note = (
+        db.query(Note)
+        .filter(
+            Note.note_id == note_id,
+            Note.client_id == client_id,
+            Note.clinic_id == user.clinic_id,
+            Note.visible.is_(True),
+        )
+        .first()
+    )
+    if not note:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+
+    row = (
+        db.query(NoteAttachment)
+        .filter(
+            NoteAttachment.id == attachment_id,
+            NoteAttachment.note_id == note_id,
+            NoteAttachment.clinic_id == user.clinic_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+
+    key = row.attachment_url
+    db.delete(row)
+    db.commit()
+    media_svc.delete_object(key)
+    return OkResponse(data=_serialize_note(db, note))
+
+
+@router.post("/{client_id}/photo", response_model=OkResponse)
+async def upload_profile_photo(
+    client_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    file: UploadFile = File(...),
+) -> OkResponse:
+    client = _get_clinic_client(db, user.clinic_id, client_id)
+    raw = await file.read()
+    mime = media_svc.validate_photo_file(file.content_type, len(raw), file.filename or "photo.jpg")
+    new_key = media_svc.upload_bytes(raw, filename=file.filename or "photo.jpg", content_type=mime, index=0)
+    old_key = (client.profile_photo_url or "").strip() or None
+    client.profile_photo_url = new_key
+    db.commit()
+    db.refresh(client)
+    if old_key and old_key != new_key:
+        media_svc.delete_object(old_key)
+    return OkResponse(data=_serialize_client(client))

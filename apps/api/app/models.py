@@ -124,6 +124,7 @@ class Note(Base):
     client_id: Mapped[int] = mapped_column(ForeignKey("clients.client_id"), nullable=False, index=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    attachment_url: Mapped[str | None] = mapped_column(String(512))
     visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -131,6 +132,21 @@ class Note(Base):
     )
 
     client: Mapped[Client] = relationship(back_populates="notes")
+    attachments: Mapped[list[NoteAttachment]] = relationship(
+        back_populates="note", cascade="all, delete-orphan"
+    )
+
+
+class NoteAttachment(Base):
+    __tablename__ = "note_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    note_id: Mapped[int] = mapped_column(ForeignKey("notes.note_id"), nullable=False, index=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    attachment_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    note: Mapped[Note] = relationship(back_populates="attachments")
 
 
 class ClientCheckinLog(Base):

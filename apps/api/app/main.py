@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from sqlalchemy import text
+
 from app.config import get_settings
 from app.db import Base, engine
-from app.routers import appointments, auth, billing, clients, desk, prescriptions, settings, tasks
+from app.routers import appointments, auth, billing, clients, desk, media, prescriptions, settings, tasks
 
 settings_cfg = get_settings()
 
@@ -25,11 +27,23 @@ app.include_router(prescriptions.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(desk.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
+app.include_router(media.router, prefix="/api")
+
+
+def _ensure_media_schema() -> None:
+    """Additive columns/tables for media without Alembic (pilot)."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE notes ADD COLUMN IF NOT EXISTS attachment_url VARCHAR(512)"
+            )
+        )
+    Base.metadata.create_all(bind=engine)
 
 
 @app.on_event("startup")
 def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
+    _ensure_media_schema()
 
 
 @app.get("/api/health")

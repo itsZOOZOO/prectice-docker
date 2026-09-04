@@ -44,6 +44,7 @@ from app.models import (
     MedicineTemplate,
     MoneyReceipt,
     Note,
+    NoteAttachment,
     Prescription,
     PrescriptionItem,
     Task,
@@ -119,6 +120,7 @@ def _reset_sequences(db) -> None:
         ("users", "user_id"),
         ("clients", "client_id"),
         ("notes", "note_id"),
+        ("note_attachments", "id"),
         ("client_checkin_logs", "id"),
         ("clinic_settings", "id"),
         ("appointments_doctors", "doctor_id"),
@@ -149,6 +151,7 @@ def _wipe_clinic(db, clinic_id: int) -> None:
         Prescription,
         MoneyReceipt,
         Bill,
+        NoteAttachment,
         Note,
         ClientCheckinLog,
         Appointment,
@@ -417,21 +420,53 @@ def import_clinic(*, clinic_id: int, replace: bool, dry_run: bool, keep_admin: b
                 )
                 notes = cur.fetchall()
                 stats["notes"] = len(notes)
-                if not dry_run:
-                    for n in notes:
-                        body = (n.get("note_text") or "").strip()
-                        if not body:
-                            continue
+                imported_note_ids: list[int] = []
+                for n in notes:
+                    body = (n.get("note_text") or "").strip()
+                    legacy_attach = (n.get("attachment_url") or "").strip() or None
+                    if not body and not legacy_attach:
+                        continue
+                    imported_note_ids.append(n["note_id"])
+                    if not dry_run:
                         db.merge(
                             Note(
                                 note_id=n["note_id"],
                                 clinic_id=clinic_id,
                                 client_id=n["client_id"],
                                 user_id=n.get("user_id"),
-                                body=body,
+                                body=body or "",
+                                attachment_url=legacy_attach,
                                 visible=True,
                                 created_at=n.get("created_at") or datetime.now(timezone.utc),
                                 updated_at=n.get("created_at") or datetime.now(timezone.utc),
+                            )
+                        )
+                if not dry_run:
+                    db.flush()
+
+                # note_attachments keys only (files stay in S3)
+                if imported_note_ids:
+                    note_ph = ",".join(["%s"] * len(imported_note_ids))
+                    cur.execute(
+                        f"SELECT id, note_id, attachment_url FROM note_attachments "
+                        f"WHERE note_id IN ({note_ph})",
+                        imported_note_ids,
+                    )
+                    attach_rows = cur.fetchall()
+                else:
+                    attach_rows = []
+                stats["note_attachments"] = len(attach_rows)
+                if not dry_run:
+                    for a in attach_rows:
+                        url = (a.get("attachment_url") or "").strip()
+                        if not url:
+                            continue
+                        db.merge(
+                            NoteAttachment(
+                                id=a["id"],
+                                note_id=a["note_id"],
+                                clinic_id=clinic_id,
+                                attachment_url=url,
                             )
                         )
 

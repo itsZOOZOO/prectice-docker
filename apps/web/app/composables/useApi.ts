@@ -18,12 +18,16 @@ export function useApi() {
       headers.Authorization = `Bearer ${auth.token.value}`
     }
 
+    const isForm = typeof FormData !== 'undefined' && opts.body instanceof FormData
+
     try {
       const res = await $fetch<ApiEnvelope<T>>(`${config.public.apiBase}${path}`, {
         method: (opts.method || 'GET') as 'GET',
-        body: opts.body as Record<string, unknown> | undefined,
+        body: opts.body as BodyInit | Record<string, unknown> | undefined,
         query: opts.query as Record<string, string | number | boolean> | undefined,
-        headers
+        headers,
+        // Let browser set multipart boundary
+        ...(isForm ? {} : {})
       })
       if (!res.ok) {
         throw new Error(res.error || 'Request failed')
