@@ -1,0 +1,1 @@
+"""Prectice FastAPI application."""
