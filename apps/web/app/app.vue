@@ -12,7 +12,7 @@ useSeoMeta({
 </script>
 
 <template>
-  <UApp>
+  <UApp class="!block h-svh max-h-svh w-full max-w-full overflow-hidden">
     <NuxtLayout>
       <NuxtPage />
     </NuxtLayout>

@@ -71,7 +71,7 @@ onMounted(load)
               @click="a.client_id ? openPatient(a.client_id) : setView('calendar')"
             >
               <div>
-                <p class="text-sm font-medium"><span class="mr-2 font-mono text-[#0097A7]">{{ a.appointment_time }}</span>{{ a.name }}</p>
+                <p class="text-sm font-medium"><span class="mr-2 font-mono text-[#0097A7]">{{ formatAmPm(a.appointment_time) }}</span>{{ a.name }}</p>
                 <p class="text-xs text-slate-500">{{ a.doctor_name }}</p>
               </div>
               <span class="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">{{ a.status }}</span>

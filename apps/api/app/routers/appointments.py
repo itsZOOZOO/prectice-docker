@@ -104,9 +104,11 @@ def list_appointments(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     on: date | None = Query(default=None, description="Day to load (YYYY-MM-DD)"),
+    from_date: date | None = Query(default=None, alias="from", description="Range start"),
+    to_date: date | None = Query(default=None, alias="to", description="Range end"),
     doctor_id: int | None = None,
     client_id: int | None = None,
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=5000),
 ) -> OkResponse:
     query = db.query(Appointment).filter(Appointment.clinic_id == user.clinic_id)
     if doctor_id:
@@ -121,6 +123,24 @@ def list_appointments(
         )
         return OkResponse(data={"date": None, "items": _enrich_many(db, rows)})
 
+    if from_date and to_date:
+        rows = (
+            query.filter(
+                Appointment.appointment_date >= from_date,
+                Appointment.appointment_date <= to_date,
+            )
+            .order_by(Appointment.appointment_date.asc(), Appointment.appointment_time.asc())
+            .limit(limit)
+            .all()
+        )
+        return OkResponse(
+            data={
+                "from": from_date.isoformat(),
+                "to": to_date.isoformat(),
+                "items": _enrich_many(db, rows),
+            }
+        )
+
     day = on or datetime.now(IST).date()
     rows = (
         query.filter(Appointment.appointment_date == day)
@@ -128,6 +148,120 @@ def list_appointments(
         .all()
     )
     return OkResponse(data={"date": day.isoformat(), "items": _enrich_many(db, rows)})
+
+
+def _build_doctor_board(
+    db: Session,
+    clinic_id: int,
+    doctor: AppointmentDoctor,
+    on: date,
+    duration: int,
+) -> dict:
+    weekday = on.weekday()
+    schedule = (
+        db.query(DoctorSchedule)
+        .filter(
+            DoctorSchedule.doctor_id == doctor.doctor_id,
+            DoctorSchedule.clinic_id == clinic_id,
+            DoctorSchedule.weekday == weekday,
+            DoctorSchedule.is_working.is_(True),
+        )
+        .first()
+    )
+    if not schedule:
+        return {
+            "doctor_id": doctor.doctor_id,
+            "doctor_name": doctor.doctor_name,
+            "color_code": doctor.color_code,
+            "duration_minutes": duration,
+            "slots": [],
+            "board": [],
+        }
+
+    existing = (
+        db.query(Appointment)
+        .filter(
+            Appointment.clinic_id == clinic_id,
+            Appointment.doctor_id == doctor.doctor_id,
+            Appointment.appointment_date == on,
+            Appointment.status.notin_(list(CANCELLED_STATUSES)),
+        )
+        .all()
+    )
+    enriched = {a.appointment_id: row for a, row in zip(existing, _enrich_many(db, existing))}
+
+    free_slots: list[str] = []
+    board: list[dict] = []
+    cursor = datetime.combine(on, schedule.start_time)
+    end_bound = datetime.combine(on, schedule.end_time)
+    step = timedelta(minutes=duration)
+
+    while cursor + step <= end_bound:
+        start_t = cursor.time()
+        end_t = (cursor + step).time()
+        matched: Appointment | None = None
+        for appt in existing:
+            appt_end = appt.end_time or _add_minutes(appt.appointment_time, duration)
+            if _overlaps(start_t, end_t, appt.appointment_time, appt_end):
+                matched = appt
+                break
+        time_label = start_t.strftime("%H:%M")
+        if matched:
+            board.append(
+                {
+                    "time": time_label,
+                    "available": False,
+                    "appointment": enriched.get(matched.appointment_id),
+                }
+            )
+        else:
+            free_slots.append(time_label)
+            board.append({"time": time_label, "available": True, "appointment": None})
+        cursor += step
+
+    return {
+        "doctor_id": doctor.doctor_id,
+        "doctor_name": doctor.doctor_name,
+        "color_code": doctor.color_code,
+        "duration_minutes": duration,
+        "slots": free_slots,
+        "board": board,
+    }
+
+
+@router.get("/day-board", response_model=OkResponse)
+def day_board(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    on: date = Query(...),
+    doctor_id: int | None = None,
+    service_id: int | None = None,
+) -> OkResponse:
+    duration = 30
+    if service_id:
+        service = (
+            db.query(AppointmentService)
+            .filter(
+                AppointmentService.service_id == service_id,
+                AppointmentService.clinic_id == user.clinic_id,
+                AppointmentService.is_active.is_(True),
+            )
+            .first()
+        )
+        if not service:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+        duration = service.duration_minutes
+
+    query = db.query(AppointmentDoctor).filter(
+        AppointmentDoctor.clinic_id == user.clinic_id,
+        AppointmentDoctor.is_active.is_(True),
+    )
+    if doctor_id:
+        query = query.filter(AppointmentDoctor.doctor_id == doctor_id)
+    doctors = query.order_by(AppointmentDoctor.doctor_name).all()
+
+    columns = [_build_doctor_board(db, user.clinic_id, d, on, duration) for d in doctors]
+    return OkResponse(data={"date": on.isoformat(), "duration_minutes": duration, "doctors": columns})
 
 
 @router.get("/slots", response_model=OkResponse)
@@ -165,50 +299,15 @@ def list_slots(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
         duration = service.duration_minutes
 
-    weekday = on.weekday()  # Mon=0
-    schedule = (
-        db.query(DoctorSchedule)
-        .filter(
-            DoctorSchedule.doctor_id == doctor_id,
-            DoctorSchedule.clinic_id == user.clinic_id,
-            DoctorSchedule.weekday == weekday,
-            DoctorSchedule.is_working.is_(True),
-        )
-        .first()
+    built = _build_doctor_board(db, user.clinic_id, doctor, on, duration)
+    return OkResponse(
+        data={
+            "date": on.isoformat(),
+            "duration_minutes": duration,
+            "slots": built["slots"],
+            "board": built["board"],
+        }
     )
-    if not schedule:
-        return OkResponse(data={"date": on.isoformat(), "duration_minutes": duration, "slots": []})
-
-    existing = (
-        db.query(Appointment)
-        .filter(
-            Appointment.clinic_id == user.clinic_id,
-            Appointment.doctor_id == doctor_id,
-            Appointment.appointment_date == on,
-            Appointment.status.notin_(list(CANCELLED_STATUSES)),
-        )
-        .all()
-    )
-
-    slots: list[str] = []
-    cursor = datetime.combine(on, schedule.start_time)
-    end_bound = datetime.combine(on, schedule.end_time)
-    step = timedelta(minutes=duration)
-
-    while cursor + step <= end_bound:
-        start_t = cursor.time()
-        end_t = (cursor + step).time()
-        conflict = False
-        for appt in existing:
-            appt_end = appt.end_time or _add_minutes(appt.appointment_time, duration)
-            if _overlaps(start_t, end_t, appt.appointment_time, appt_end):
-                conflict = True
-                break
-        if not conflict:
-            slots.append(start_t.strftime("%H:%M"))
-        cursor += step
-
-    return OkResponse(data={"date": on.isoformat(), "duration_minutes": duration, "slots": slots})
 
 
 @router.post("", response_model=OkResponse, status_code=status.HTTP_201_CREATED)
@@ -293,7 +392,34 @@ def create_appointment(
     db.add(appt)
     db.commit()
     db.refresh(appt)
-    return OkResponse(data=_serialize(appt, doctor.doctor_name, service_name))
+
+    data = _serialize(appt, doctor.doctor_name, service_name)
+    data["whatsapp_sent"] = False
+    data["whatsapp_message"] = "WhatsApp not requested"
+
+    if body.send_whatsapp:
+        from app import whatsapp as wa
+
+        phone = wa.resolve_phone(form_phone=body.phone or appt.phone, client=client, db=db)
+        if not phone:
+            data["whatsapp_sent"] = False
+            data["whatsapp_message"] = "No phone number for WhatsApp"
+        elif not wa.is_enabled(db, user.clinic_id):
+            data["whatsapp_sent"] = False
+            data["whatsapp_message"] = wa.DISABLED_MESSAGE
+        else:
+            result = wa.send_appointment_confirm(
+                db,
+                clinic_id=user.clinic_id,
+                phone=phone,
+                patient_name=appt.name,
+                appt_date=appt.appointment_date,
+                appt_time=appt.appointment_time,
+            )
+            data["whatsapp_sent"] = bool(result.get("success"))
+            data["whatsapp_message"] = str(result.get("message") or "")
+
+    return OkResponse(data=data)
 
 
 @router.patch("/{appointment_id}/status", response_model=OkResponse)

@@ -106,6 +106,7 @@ class NoteOut(BaseModel):
     user_id: int | None
     body: str
     created_at: datetime
+    author_name: str | None = None
 
 
 class CheckinOut(BaseModel):
@@ -153,6 +154,7 @@ class AppointmentCreate(BaseModel):
     appointment_time: time
     status: str = "Confirmed"
     notes: str | None = None
+    send_whatsapp: bool = False
 
 
 class AppointmentStatusUpdate(BaseModel):

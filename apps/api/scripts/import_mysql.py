@@ -39,6 +39,7 @@ from app.models import (
     Client,
     ClientCheckinLog,
     Clinic,
+    ClinicSetting,
     DoctorSchedule,
     MedicineTemplate,
     MoneyReceipt,
@@ -119,6 +120,7 @@ def _reset_sequences(db) -> None:
         ("clients", "client_id"),
         ("notes", "note_id"),
         ("client_checkin_logs", "id"),
+        ("clinic_settings", "id"),
         ("appointments_doctors", "doctor_id"),
         ("appointments_services", "service_id"),
         ("appointments_statuses", "status_id"),
@@ -156,6 +158,7 @@ def _wipe_clinic(db, clinic_id: int) -> None:
         AppointmentStatus,
         MedicineTemplate,
         Task,
+        ClinicSetting,
         Client,
         User,
         Clinic,
@@ -202,6 +205,43 @@ def import_clinic(*, clinic_id: int, replace: bool, dry_run: bool, keep_admin: b
                 )
                 db.flush()
                 stats["clinics"] = 1
+
+            # Per-clinic WhatsApp / feature flags (wa_enabled, wa_api_key, …)
+            wa_keys = (
+                "wa_enabled",
+                "wa_api_key",
+                "wa_api_url",
+                "wa_inbox_enabled",
+                "wa_inbox_api_url",
+            )
+            cur.execute(
+                f"SELECT setting_key, setting_value FROM clinic_settings "
+                f"WHERE clinic_id=%s AND setting_key IN ({','.join(['%s'] * len(wa_keys))})",
+                (clinic_id, *wa_keys),
+            )
+            setting_rows = cur.fetchall()
+            stats["clinic_settings"] = len(setting_rows)
+            if not dry_run:
+                for s in setting_rows:
+                    existing = (
+                        db.query(ClinicSetting)
+                        .filter(
+                            ClinicSetting.clinic_id == clinic_id,
+                            ClinicSetting.setting_key == s["setting_key"],
+                        )
+                        .first()
+                    )
+                    if existing:
+                        existing.setting_value = s.get("setting_value")
+                    else:
+                        db.add(
+                            ClinicSetting(
+                                clinic_id=clinic_id,
+                                setting_key=s["setting_key"],
+                                setting_value=s.get("setting_value"),
+                            )
+                        )
+                db.flush()
 
             cur.execute("SELECT * FROM users WHERE clinic_id=%s", (clinic_id,))
             users = cur.fetchall()

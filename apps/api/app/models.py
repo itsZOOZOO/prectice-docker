@@ -33,6 +33,20 @@ class Clinic(Base):
 
     users: Mapped[list[User]] = relationship(back_populates="clinic")
     clients: Mapped[list[Client]] = relationship(back_populates="clinic")
+    settings: Mapped[list[ClinicSetting]] = relationship(back_populates="clinic", cascade="all, delete-orphan")
+
+
+class ClinicSetting(Base):
+    __tablename__ = "clinic_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    setting_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    setting_value: Mapped[str | None] = mapped_column(Text)
+
+    clinic: Mapped[Clinic] = relationship(back_populates="settings")
+
+    __table_args__ = (UniqueConstraint("clinic_id", "setting_key", name="uq_clinic_settings_key"),)
 
 
 class User(Base):

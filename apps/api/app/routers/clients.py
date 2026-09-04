@@ -21,6 +21,20 @@ from app.schemas import (
 router = APIRouter(prefix="/clients", tags=["clients"])
 
 
+def _author_name(user: User | None) -> str | None:
+    if not user:
+        return None
+    name = (user.full_name or "").strip()
+    return name or user.username
+
+
+def _serialize_note(db: Session, note: Note) -> dict:
+    data = NoteOut.model_validate(note).model_dump()
+    author = db.get(User, note.user_id) if note.user_id else None
+    data["author_name"] = _author_name(author)
+    return data
+
+
 def _get_clinic_client(db: Session, clinic_id: int, client_id: int) -> Client:
     client = (
         db.query(Client)
@@ -193,7 +207,7 @@ def list_notes(
         .order_by(Note.created_at.desc())
         .all()
     )
-    return OkResponse(data=[NoteOut.model_validate(r).model_dump() for r in rows])
+    return OkResponse(data=[_serialize_note(db, r) for r in rows])
 
 
 @router.post("/{client_id}/notes", response_model=OkResponse, status_code=status.HTTP_201_CREATED)
@@ -213,4 +227,4 @@ def create_note(
     db.add(note)
     db.commit()
     db.refresh(note)
-    return OkResponse(data=NoteOut.model_validate(note).model_dump())
+    return OkResponse(data=_serialize_note(db, note))
