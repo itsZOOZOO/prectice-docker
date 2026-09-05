@@ -53,7 +53,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.production up -d --bui
 - Optional SSO overrides (defaults are fine for prod):
   - `NUXT_PUBLIC_SSO_AUTH_BASE_URL=https://auth.pratikp.com`
   - `NUXT_PUBLIC_SSO_APP_SLUG=navapp-dental`
-  - `NUXT_PUBLIC_SSO_CALLBACK_URL=https://dental.navapp.in/sso/callback.php` (or leave empty to use `origin + /sso/callback.php`)
+  - `NUXT_PUBLIC_SSO_CALLBACK_URL=https://dental.navapp.in/sso/callback` (must match auth portal exactly)
 
 ## SSO (API on VPS)
 
@@ -67,9 +67,9 @@ JWT_EXPIRE_HOURS=12
 JWT_REMEMBER_EXPIRE_HOURS=720
 ```
 
-Register callbacks on the auth app (exact match, no trailing slash):
+Register callback on the auth app (exact match, no trailing slash, no `.php` unless you also change the app):
 
-- `https://dental.navapp.in/sso/callback.php`
-- `http://localhost:3000/sso/callback.php`
+- `https://dental.navapp.in/sso/callback`
+- `http://localhost:3000/sso/callback` (local)
 
 Staff Google email must match an active `users.email`.

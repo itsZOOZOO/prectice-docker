@@ -1,6 +1,6 @@
 const REMEMBER_PREF_KEY = 'prectice_sso_remember'
 /** Must match the return URL registered on auth.pratikp.com for navapp-dental. */
-const SSO_CALLBACK_PATH = '/sso/callback.php'
+const SSO_CALLBACK_PATH = '/sso/callback'
 
 export function getSsoCallbackUrl(): string {
   const config = useRuntimeConfig()
