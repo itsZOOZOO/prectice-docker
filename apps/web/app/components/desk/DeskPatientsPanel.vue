@@ -1182,7 +1182,8 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
           </template>
 
           <template v-else>
-          <div class="relative min-h-0 flex-1">
+          <!-- flex-1 + overflow-y-auto (not nested h-full) so mobile notes/timeline can scroll -->
+          <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden">
             <div
               class="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 rounded-full bg-[#1C2B35]/90 px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap text-white shadow-sm transition-opacity duration-200"
               :class="showFloatingDate && floatingDateLabel ? 'opacity-100' : 'opacity-0'"
@@ -1190,8 +1191,12 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
             >
               {{ floatingDateLabel }}
             </div>
-            <div ref="timelineEl" class="h-full overflow-y-auto px-5 py-4" @scroll="onTimelineScroll">
-            <div class="mx-auto w-full max-w-[30rem]">
+            <div
+              ref="timelineEl"
+              class="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-4 py-4 sm:px-5 [-webkit-overflow-scrolling:touch]"
+              @scroll="onTimelineScroll"
+            >
+            <div class="mx-auto w-full max-w-[30rem] pb-2">
               <p v-if="loadingChart" class="text-sm text-slate-400">Loading timeline…</p>
               <ul v-else class="space-y-3">
                 <li

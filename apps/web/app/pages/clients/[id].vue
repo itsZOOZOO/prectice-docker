@@ -9,9 +9,10 @@ const patientId = computed(() => {
 </script>
 
 <template>
-  <div class="h-full min-h-0">
+  <div class="flex h-full min-h-0 flex-col overflow-hidden">
     <DeskPatientsPanel
       v-if="patientId"
+      class="min-h-0 flex-1"
       mobile-chart
       :fixed-patient-id="patientId"
     />
