@@ -49,6 +49,25 @@ class ClinicSetting(Base):
     __table_args__ = (UniqueConstraint("clinic_id", "setting_key", name="uq_clinic_settings_key"),)
 
 
+class PdfTemplate(Base):
+    """Per-clinic prescription PDF layout (print / whatsapp)."""
+
+    __tablename__ = "pdf_templates"
+
+    template_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int | None] = mapped_column(ForeignKey("clinics.clinic_id"), index=True)
+    template_type: Mapped[str] = mapped_column(String(32), nullable=False, default="print")
+    logo_path: Mapped[str | None] = mapped_column(String(512))
+    header_content: Mapped[str | None] = mapped_column(Text)
+    footer_content: Mapped[str | None] = mapped_column(Text)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("clinic_id", "template_type", name="uq_pdf_templates_clinic_type"),
+    )
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -252,7 +271,8 @@ class Bill(Base):
     clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
     client_id: Mapped[int] = mapped_column(ForeignKey("clients.client_id"), nullable=False, index=True)
     amount_due: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), default="open", nullable=False)  # open | paid
+    status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
+    # pending | partial | paid | cancelled (legacy "open" treated as pending)
     description: Mapped[str | None] = mapped_column(String(255))
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -502,4 +522,70 @@ class TreatmentSubPlanPhoto(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     sub_plan: Mapped[TreatmentSubPlan] = relationship(back_populates="photos")
+
+
+# --- Warranty cards (ported from MySQL card_issued + lookups) ---
+
+
+class CardType(Base):
+    __tablename__ = "card_types"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    type_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+
+
+class ProductMembershipType(Base):
+    __tablename__ = "product_membership_types"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+
+
+class TermsCondition(Base):
+    __tablename__ = "terms_conditions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    detailed_condition: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+
+
+class Benefit(Base):
+    __tablename__ = "benefits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    detailed_benefit: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+
+
+class CardIssued(Base):
+    __tablename__ = "card_issued"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.client_id"), nullable=False, index=True)
+    card_type_id: Mapped[int] = mapped_column(ForeignKey("card_types.id"), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("product_membership_types.id"), nullable=False)
+    date_of_purchase: Mapped[date] = mapped_column(Date, nullable=False)
+    benefit_start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    benefit_end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    terms_conditions_id: Mapped[int] = mapped_column(ForeignKey("terms_conditions.id"), nullable=False)
+    benefit_id: Mapped[int] = mapped_column(ForeignKey("benefits.id"), nullable=False)
+    number_of_units: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    unique_code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    warranty_period: Mapped[int] = mapped_column(Integer, nullable=False)
+    visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
 

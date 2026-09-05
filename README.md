@@ -33,7 +33,7 @@ Replaces the daily path of the old **Next.js + PHP/MySQL** stack (`prectice` + `
 | Heavy reports / filter builder | Still on old app |
 | SSO (Google) | Password + remember only for now |
 | Mobile bottom-nav app | Desktop desk only in Nuxt |
-| Warranty cards | Not ported |
+| Warranty cards | Desk CRUD + WhatsApp send (templates settings later) |
 | PDF Rx / media proxy polish | Not ported |
 | Alembic migrations | `create_all` + SQL indexes for now |
 | Automated backups | Ops still manual |

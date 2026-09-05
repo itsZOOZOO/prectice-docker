@@ -1,5 +1,6 @@
 <script setup lang="ts">
-const { clinicName, user, hydrate, logout } = useAuth()
+const route = useRoute()
+const { clinicName, user, hydrate, logout, isSuperadmin } = useAuth()
 hydrate()
 
 const { view, title, setView, openPatient, patientId } = useDeskUrl()
@@ -13,6 +14,9 @@ const mobileSwitchTitle = computed(() =>
     ? 'Narrow screen detected — switch to Mobile App'
     : 'Switch to Mobile App'
 )
+
+const isAdminRoute = computed(() => route.path.startsWith('/admin'))
+const headerTitle = computed(() => (isAdminRoute.value ? 'Admin' : title.value))
 
 const collapsed = ref(false)
 const search = ref('')
@@ -41,7 +45,20 @@ onMounted(() => {
     collapsed.value = localStorage.getItem('desk-sidebar-collapsed') === 'true'
   } catch { /* ignore */ }
   refreshBadges()
+  void refreshMe()
 })
+
+async function refreshMe() {
+  try {
+    const data = await api<{ user: typeof user.value, clinic_name: string | null }>('/auth/me')
+    if (data.user && user.value) {
+      user.value = { ...user.value, ...data.user }
+      try {
+        localStorage.setItem('prectice_user', JSON.stringify(user.value))
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+}
 
 function toggleSidebar() {
   collapsed.value = !collapsed.value
@@ -192,6 +209,19 @@ useSeoMeta({ title: title })
               {{ badgeFor(item.key) > 99 ? '99+' : badgeFor(item.key) }}
             </span>
           </button>
+          <NuxtLink
+            v-if="isSuperadmin"
+            to="/admin"
+            class="relative flex w-full items-center rounded-lg text-left text-sm font-medium transition"
+            :class="[
+              collapsed ? 'justify-center px-2 py-2.5' : 'gap-3 px-3 py-2.5',
+              isAdminRoute ? 'bg-[#0097A7]/10 text-[#0097A7]' : 'text-slate-600 hover:bg-slate-50'
+            ]"
+            title="Admin"
+          >
+            <span class="text-base">🛡</span>
+            <span v-if="!collapsed" class="flex-1">Admin</span>
+          </NuxtLink>
         </nav>
 
         <div class="border-t border-slate-100 space-y-2" :class="collapsed ? 'p-2' : 'p-4'">
@@ -221,8 +251,8 @@ useSeoMeta({ title: title })
 
       <div class="desk-shell__main">
         <header class="flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
-          <h1 class="shrink-0 text-lg font-semibold text-[#1C2B35]">{{ title }}</h1>
-          <div class="ml-auto flex min-w-0 items-center gap-2">
+          <h1 class="shrink-0 text-lg font-semibold text-[#1C2B35]">{{ headerTitle }}</h1>
+          <div v-if="!isAdminRoute" class="ml-auto flex min-w-0 items-center gap-2">
             <div class="relative w-full min-w-0 max-w-md sm:w-[320px]">
               <div class="flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3">
                 <span class="text-slate-400">🔍</span>

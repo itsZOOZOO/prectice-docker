@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 
 from app.config import get_settings
 from app.db import Base, engine
+from app import models as _models  # noqa: F401 — register metadata
 from app.routers import (
+    admin,
     appointments,
     auth,
     billing,
@@ -17,6 +19,7 @@ from app.routers import (
     settings,
     tasks,
     treatment_plans,
+    warranty_cards,
 )
 
 settings_cfg = get_settings()
@@ -32,6 +35,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, prefix="/api")
+app.include_router(admin.router, prefix="/api")
 app.include_router(clients.router, prefix="/api")
 app.include_router(appointments.router, prefix="/api")
 app.include_router(billing.router, prefix="/api")
@@ -41,6 +45,7 @@ app.include_router(desk.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(labs.router, prefix="/api")
 app.include_router(treatment_plans.router, prefix="/api")
+app.include_router(warranty_cards.router, prefix="/api")
 app.include_router(media.router, prefix="/api")
 
 
@@ -53,11 +58,60 @@ def _ensure_media_schema() -> None:
             )
         )
     Base.metadata.create_all(bind=engine)
+    # Keep serials ahead of imported explicit PKs (warranty cards, etc.)
+    with engine.begin() as conn:
+        for table, col in (
+            ("card_issued", "id"),
+            ("card_types", "id"),
+            ("product_membership_types", "id"),
+            ("terms_conditions", "id"),
+            ("benefits", "id"),
+        ):
+            conn.execute(
+                text(
+                    f"""
+                    DO $$
+                    BEGIN
+                      IF to_regclass('{table}') IS NOT NULL
+                         AND pg_get_serial_sequence('{table}', '{col}') IS NOT NULL THEN
+                        PERFORM setval(
+                          pg_get_serial_sequence('{table}', '{col}'),
+                          GREATEST(COALESCE((SELECT MAX({col}) FROM {table}), 1), 1),
+                          true
+                        );
+                      END IF;
+                    END $$;
+                    """
+                )
+            )
+
+
+def _promote_aarogyam_superadmin() -> None:
+    """One-shot: clinic 1 username admin → superadmin (platform ops)."""
+    from app.db import SessionLocal
+    from app.models import User
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(User)
+            .filter(User.clinic_id == 1, func.lower(User.username) == "admin")
+            .first()
+        )
+        if row and (row.role or "").lower() != "superadmin":
+            row.role = "superadmin"
+            db.commit()
+    finally:
+        db.close()
 
 
 @app.on_event("startup")
 def on_startup() -> None:
     _ensure_media_schema()
+    try:
+        _promote_aarogyam_superadmin()
+    except Exception:  # noqa: BLE001 — don't block boot
+        pass
 
 
 @app.get("/api/health")

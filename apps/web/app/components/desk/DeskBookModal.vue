@@ -26,6 +26,9 @@ const toast = useToast()
 
 const step = ref(1)
 const entryStep = ref(1)
+/** Editing one field from Confirm — pick then return to Confirm (keep other choices). */
+const editingFromConfirm = ref(false)
+const slotHint = ref('')
 const doctors = ref<Doctor[]>([])
 const services = ref<Service[]>([])
 const clients = ref<ClientOpt[]>([])
@@ -49,7 +52,9 @@ const form = reactive({
 })
 
 const canSendWa = computed(() => waEnabled.value && Boolean((form.phone || '').trim() || form.client_id))
-const hasOpenPatient = computed(() => Boolean(props.clientId) || (isEdit.value && Boolean(form.client_id)))
+/** Patient fixed from open chart on new book — skip patient step. Edit still allows Change. */
+const hasOpenPatient = computed(() => Boolean(props.clientId) && !isEdit.value)
+const canChangePatient = computed(() => isEdit.value || !props.clientId)
 
 const stepLabels = computed(() => {
   const labels = [
@@ -66,6 +71,18 @@ const stepLabels = computed(() => {
 const modalTitle = computed(() => (isEdit.value ? 'Edit appointment' : 'Book appointment'))
 const confirmLabel = computed(() => (isEdit.value ? 'Save changes' : 'Confirm book'))
 
+const serviceLabel = computed(() =>
+  services.value.find(s => s.service_id === form.service_id)?.service_name || '—'
+)
+const doctorLabel = computed(() =>
+  doctors.value.find(d => d.doctor_id === form.doctor_id)?.doctor_name || '—'
+)
+const whenLabel = computed(() => {
+  const datePart = formatBookConfirmDate(form.date)
+  if (!form.appointment_time) return `${datePart} · pick a time`
+  return `${datePart} · ${formatAmPm(form.appointment_time)}`
+})
+
 const filteredClients = computed(() => {
   const q = clientQ.value.trim().toLowerCase()
   if (!q) return clients.value.slice(0, 40)
@@ -77,6 +94,92 @@ const filteredClients = computed(() => {
 function goAfterSlot() {
   if (hasOpenPatient.value) step.value = 5
   else step.value = 4
+}
+
+function finishEditOrContinue(next: number) {
+  if (editingFromConfirm.value) {
+    editingFromConfirm.value = false
+    slotHint.value = ''
+    step.value = 5
+    return
+  }
+  step.value = next
+}
+
+async function ensureClientsLoaded() {
+  if (clients.value.length) return
+  const data = await api<{ items: ClientOpt[] }>('/clients', { query: { limit: 200 } })
+  clients.value = data.items
+}
+
+/** Keep time if still free (2B); otherwise clear and jump to Slot with hint (1A). */
+async function afterDoctorOrServiceChange() {
+  if (!form.doctor_id) {
+    form.appointment_time = ''
+    editingFromConfirm.value = true
+    step.value = 3
+    return
+  }
+  const keep = form.appointment_time
+  const data = await api<{ slots: string[] }>('/appointments/slots', {
+    query: {
+      on: form.date,
+      doctor_id: form.doctor_id,
+      service_id: form.service_id || undefined,
+      exclude_appointment_id: props.editAppointmentId || undefined
+    }
+  })
+  // Use raw free slots (don't inject current time) so "still free?" is accurate
+  slots.value = data.slots
+  if (keep && data.slots.includes(keep)) {
+    form.appointment_time = keep
+    finishEditOrContinue(3)
+    return
+  }
+  form.appointment_time = ''
+  slotHint.value = keep ? 'Previous time isn’t free — pick another' : ''
+  editingFromConfirm.value = true
+  step.value = 3
+}
+
+async function editField(n: number) {
+  if (n === 4 && !canChangePatient.value) return
+  if (n === 4) {
+    await ensureClientsLoaded()
+    clientQ.value = ''
+    walkInMode.value = false
+  }
+  if (n === 3 && form.doctor_id) {
+    await loadSlots(Boolean(form.appointment_time))
+  }
+  editingFromConfirm.value = true
+  slotHint.value = ''
+  step.value = n
+}
+
+function onStepChipClick(n: number) {
+  if (n === step.value) return
+  // From Confirm: edit that field and return
+  if (step.value === 5 && n < 5) {
+    void editField(n)
+    return
+  }
+  // While editing from Confirm — Confirm chip returns without changing
+  if (editingFromConfirm.value && n === 5) {
+    editingFromConfirm.value = false
+    slotHint.value = ''
+    step.value = 5
+    return
+  }
+  // While editing from Confirm, jump between fields
+  if (editingFromConfirm.value && n < 5) {
+    void editField(n)
+    return
+  }
+  // Initial wizard: only jump back to completed steps
+  if (!editingFromConfirm.value && n < step.value) {
+    step.value = n
+  }
 }
 
 async function loadSlots(preserveTime = false) {
@@ -108,6 +211,8 @@ watch(open, async (v) => {
   clientQ.value = ''
   walkInMode.value = false
   sendWhatsapp.value = false
+  editingFromConfirm.value = false
+  slotHint.value = ''
 
   const [meta, wa] = await Promise.all([
     api<{ doctors: Doctor[], services: Service[] }>('/appointments/meta'),
@@ -137,7 +242,7 @@ watch(open, async (v) => {
       form.doctor_id = appt.doctor_id
       form.service_id = appt.service_id
       await loadSlots(true)
-      entryStep.value = 1
+      entryStep.value = 5
       step.value = 5
       return
     } catch (e: unknown) {
@@ -201,22 +306,37 @@ watch(() => [form.phone, form.client_id, waEnabled.value], () => {
 })
 
 watch(() => [form.doctor_id, form.service_id, form.date], () => {
-  if (step.value === 3 && form.doctor_id) loadSlots(false)
+  if (step.value === 3 && form.doctor_id) loadSlots(Boolean(editingFromConfirm.value && form.appointment_time))
 })
 
 function pickService(id: number) {
   form.service_id = id
+  if (editingFromConfirm.value) {
+    void afterDoctorOrServiceChange()
+    return
+  }
   step.value = 2
 }
 
 function pickDoctor(id: number) {
   form.doctor_id = id
+  if (editingFromConfirm.value) {
+    void afterDoctorOrServiceChange()
+    return
+  }
   form.appointment_time = ''
+  slotHint.value = ''
   step.value = 3
 }
 
 function pickSlot(slot: string) {
   form.appointment_time = slot
+  slotHint.value = ''
+  if (editingFromConfirm.value) {
+    editingFromConfirm.value = false
+    step.value = 5
+    return
+  }
   goAfterSlot()
 }
 
@@ -229,6 +349,8 @@ function pickClient(id: number) {
     form.phone = c.number || ''
   }
   sendWhatsapp.value = false
+  editingFromConfirm.value = false
+  slotHint.value = ''
   step.value = 5
 }
 
@@ -243,10 +365,19 @@ function startWalkIn() {
 function continueWalkIn() {
   if (!form.name.trim()) return
   sendWhatsapp.value = false
+  editingFromConfirm.value = false
+  slotHint.value = ''
   step.value = 5
 }
 
 function goBack() {
+  // Editing a field from Confirm → Back returns to Confirm, keeps prior values
+  if (editingFromConfirm.value && step.value !== 5) {
+    editingFromConfirm.value = false
+    slotHint.value = ''
+    step.value = 5
+    return
+  }
   if (step.value <= entryStep.value) return
   if (step.value === 5 && hasOpenPatient.value) {
     if (entryStep.value >= 4) {
@@ -322,22 +453,30 @@ async function book() {
             :key="s.n"
             class="inline-flex items-center gap-1.5"
           >
-            <span
-              class="rounded-full px-2 py-0.5"
-              :class="step === s.n ? 'bg-[#0097A7] text-white' : step > s.n ? 'bg-[#0097A7]/15 text-[#0097A7]' : 'bg-slate-100'"
+            <button
+              type="button"
+              class="rounded-full px-2 py-0.5 transition"
+              :class="[
+                step === s.n ? 'bg-[#0097A7] text-white' : step > s.n || editingFromConfirm ? 'bg-[#0097A7]/15 text-[#0097A7]' : 'bg-slate-100',
+                (step === 5 && s.n < 5) || (editingFromConfirm && s.n !== step) || (!editingFromConfirm && s.n < step)
+                  ? 'cursor-pointer hover:ring-1 hover:ring-[#0097A7]/40'
+                  : 'cursor-default'
+              ]"
+              :disabled="s.n === 4 && !canChangePatient"
+              @click="onStepChipClick(s.n)"
             >
               {{ s.label }}
-            </span>
+            </button>
             <span v-if="i < stepLabels.length - 1" class="text-slate-300">→</span>
           </span>
         </div>
 
         <p class="mb-3 text-xs text-slate-500">
-          <template v-if="step === 1">Tap a service to continue</template>
-          <template v-else-if="step === 2">Tap a doctor to continue</template>
-          <template v-else-if="step === 3">Tap a time slot to continue</template>
-          <template v-else-if="step === 4">Pick a patient, or walk-in</template>
-          <template v-else>{{ isEdit ? 'Review and save' : 'Review and confirm' }}</template>
+          <template v-if="step === 1">{{ editingFromConfirm ? 'Change service — other details stay' : 'Tap a service to continue' }}</template>
+          <template v-else-if="step === 2">{{ editingFromConfirm ? 'Change doctor — other details stay' : 'Tap a doctor to continue' }}</template>
+          <template v-else-if="step === 3">{{ editingFromConfirm ? 'Change date or time' : 'Tap a time slot to continue' }}</template>
+          <template v-else-if="step === 4">{{ editingFromConfirm ? 'Change patient' : 'Pick a patient, or walk-in' }}</template>
+          <template v-else>{{ isEdit ? 'Review and save — tap Change to edit one field' : 'Review and confirm — tap Change to edit one field' }}</template>
         </p>
 
         <div class="min-h-0 flex-1 overflow-y-auto pb-2">
@@ -346,7 +485,8 @@ async function book() {
               v-for="s in services"
               :key="s.service_id"
               type="button"
-              class="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 text-left text-sm hover:border-[#0097A7] hover:bg-[#0097A7]/5"
+              class="flex w-full items-center justify-between rounded-lg border px-3 py-2.5 text-left text-sm hover:border-[#0097A7] hover:bg-[#0097A7]/5"
+              :class="form.service_id === s.service_id ? 'border-[#0097A7] bg-[#0097A7]/10' : 'border-slate-200'"
               @click="pickService(s.service_id)"
             >
               <span>{{ s.service_name }}</span>
@@ -359,7 +499,8 @@ async function book() {
               v-for="d in doctors"
               :key="d.doctor_id"
               type="button"
-              class="flex w-full rounded-lg border border-slate-200 px-3 py-2.5 text-left text-sm hover:border-[#0097A7] hover:bg-[#0097A7]/5"
+              class="flex w-full rounded-lg border px-3 py-2.5 text-left text-sm hover:border-[#0097A7] hover:bg-[#0097A7]/5"
+              :class="form.doctor_id === d.doctor_id ? 'border-[#0097A7] bg-[#0097A7]/10' : 'border-slate-200'"
               @click="pickDoctor(d.doctor_id)"
             >
               {{ d.doctor_name }}
@@ -367,11 +508,17 @@ async function book() {
           </div>
 
           <div v-else-if="step === 3" class="space-y-3">
+            <p
+              v-if="slotHint"
+              class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+            >
+              {{ slotHint }}
+            </p>
             <UInput
               :model-value="form.date"
               type="date"
               class="w-full"
-              @update:model-value="(v: string) => { form.date = v; form.appointment_time = '' }"
+              @update:model-value="(v: string) => { form.date = v; form.appointment_time = ''; slotHint = '' }"
             />
             <div v-if="!slots.length" class="text-sm text-slate-500">No free slots this day.</div>
             <div v-else class="flex flex-wrap gap-2">
@@ -379,7 +526,8 @@ async function book() {
                 v-for="slot in slots"
                 :key="slot"
                 type="button"
-                class="rounded-lg border border-slate-200 px-3 py-2 text-sm hover:border-[#0097A7] hover:bg-[#0097A7] hover:text-white"
+                class="rounded-lg border px-3 py-2 text-sm hover:border-[#0097A7] hover:bg-[#0097A7] hover:text-white"
+                :class="form.appointment_time === slot ? 'border-[#0097A7] bg-[#0097A7] text-white' : 'border-slate-200'"
                 @click="pickSlot(slot)"
               >
                 {{ formatAmPm(slot) }}
@@ -405,6 +553,7 @@ async function book() {
                 :key="c.client_id"
                 type="button"
                 class="flex w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-[#0097A7]/5"
+                :class="form.client_id === c.client_id ? 'bg-[#0097A7]/10 text-[#0097A7]' : ''"
                 @click="pickClient(c.client_id)"
               >
                 {{ c.name }}<span v-if="c.number" class="text-slate-400"> · {{ c.number }}</span>
@@ -421,11 +570,60 @@ async function book() {
           </div>
 
           <div v-else class="space-y-3">
-            <div class="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
-              <p><span class="text-slate-500">Patient:</span> {{ form.name }}</p>
-              <p><span class="text-slate-500">When:</span> {{ form.date }} · {{ formatAmPm(form.appointment_time) }}</p>
-              <p><span class="text-slate-500">Doctor:</span> {{ doctors.find(d => d.doctor_id === form.doctor_id)?.doctor_name }}</p>
-              <p><span class="text-slate-500">Service:</span> {{ services.find(s => s.service_id === form.service_id)?.service_name }}</p>
+            <div class="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 text-sm">
+              <div class="flex items-center justify-between gap-3 px-4 py-3">
+                <div class="min-w-0">
+                  <p class="text-[11px] font-medium uppercase tracking-wide text-slate-400">Patient</p>
+                  <p class="truncate font-medium text-[#1C2B35]">{{ form.name || '—' }}</p>
+                </div>
+                <button
+                  v-if="canChangePatient"
+                  type="button"
+                  class="shrink-0 text-xs font-semibold text-[#0097A7] hover:underline"
+                  @click="editField(4)"
+                >
+                  Change
+                </button>
+              </div>
+              <div class="flex items-center justify-between gap-3 px-4 py-3">
+                <div class="min-w-0">
+                  <p class="text-[11px] font-medium uppercase tracking-wide text-slate-400">When</p>
+                  <p class="font-medium text-[#1C2B35]">{{ whenLabel }}</p>
+                </div>
+                <button
+                  type="button"
+                  class="shrink-0 text-xs font-semibold text-[#0097A7] hover:underline"
+                  @click="editField(3)"
+                >
+                  Change
+                </button>
+              </div>
+              <div class="flex items-center justify-between gap-3 px-4 py-3">
+                <div class="min-w-0">
+                  <p class="text-[11px] font-medium uppercase tracking-wide text-slate-400">Doctor</p>
+                  <p class="truncate font-medium text-[#1C2B35]">{{ doctorLabel }}</p>
+                </div>
+                <button
+                  type="button"
+                  class="shrink-0 text-xs font-semibold text-[#0097A7] hover:underline"
+                  @click="editField(2)"
+                >
+                  Change
+                </button>
+              </div>
+              <div class="flex items-center justify-between gap-3 px-4 py-3">
+                <div class="min-w-0">
+                  <p class="text-[11px] font-medium uppercase tracking-wide text-slate-400">Service</p>
+                  <p class="truncate font-medium text-[#1C2B35]">{{ serviceLabel }}</p>
+                </div>
+                <button
+                  type="button"
+                  class="shrink-0 text-xs font-semibold text-[#0097A7] hover:underline"
+                  @click="editField(1)"
+                >
+                  Change
+                </button>
+              </div>
             </div>
             <label
               v-if="waEnabled"
@@ -452,7 +650,7 @@ async function book() {
           <UButton
             color="neutral"
             variant="ghost"
-            :disabled="step <= entryStep"
+            :disabled="!editingFromConfirm && step <= entryStep"
             @click="goBack"
           >
             Back
@@ -469,6 +667,7 @@ async function book() {
             v-else-if="step === 5"
             class="bg-[#0097A7]"
             :loading="booking"
+            :disabled="!form.doctor_id || !form.appointment_time || !form.name.trim()"
             @click="book"
           >
             {{ confirmLabel }}

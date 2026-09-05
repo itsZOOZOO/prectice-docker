@@ -331,6 +331,136 @@ def create_note_json(
     return OkResponse(data=_serialize_note(db, note))
 
 
+def _get_visible_note(db: Session, clinic_id: int, client_id: int, note_id: int) -> Note:
+    note = (
+        db.query(Note)
+        .filter(
+            Note.note_id == note_id,
+            Note.client_id == client_id,
+            Note.clinic_id == clinic_id,
+            Note.visible.is_(True),
+        )
+        .first()
+    )
+    if not note:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+    return note
+
+
+@router.patch("/{client_id}/notes/{note_id}", response_model=OkResponse)
+async def update_note(
+    client_id: int,
+    note_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    body: str = Form(default=""),
+    note_datetime: str | None = Form(default=None),
+    remove_attachment_ids: str | None = Form(default=None),
+    files: Annotated[list[UploadFile] | None, File()] = None,
+) -> OkResponse:
+    """Update note text/datetime; optionally remove attachments and add new files."""
+    _get_clinic_client(db, user.clinic_id, client_id)
+    note = _get_visible_note(db, user.clinic_id, client_id, note_id)
+
+    text = (body or "").strip()
+    uploads = [f for f in (files or []) if f is not None and f.filename]
+
+    remove_ids: list[int] = []
+    if remove_attachment_ids:
+        for part in remove_attachment_ids.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                remove_ids.append(int(part))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid remove_attachment_ids: {part}",
+                ) from exc
+
+    existing = (
+        db.query(NoteAttachment)
+        .filter(NoteAttachment.note_id == note_id, NoteAttachment.clinic_id == user.clinic_id)
+        .all()
+    )
+    by_id = {r.id: r for r in existing}
+    for rid in remove_ids:
+        if rid not in by_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Attachment not found: {rid}",
+            )
+
+    kept_count = len(existing) - len(remove_ids)
+    if kept_count + len(uploads) > media_svc.MAX_NOTE_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Maximum {media_svc.MAX_NOTE_FILES} files allowed per note",
+        )
+
+    remaining_after = kept_count + len(uploads)
+    # Legacy single attachment_url counts if no attachment rows
+    if remaining_after == 0 and note.attachment_url and not existing:
+        remaining_after = 1
+    if not text and remaining_after == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Note text or attachment is required",
+        )
+
+    keys_to_delete: list[str] = []
+    for rid in remove_ids:
+        row = by_id[rid]
+        if row.attachment_url:
+            keys_to_delete.append(row.attachment_url)
+        db.delete(row)
+
+    note.body = text
+    if note_datetime is not None and note_datetime.strip():
+        parsed = _optional_clinic_datetime(note_datetime)
+        if parsed is not None:
+            note.created_at = parsed
+
+    db.flush()
+
+    start_index = kept_count
+    for i, upload in enumerate(uploads):
+        raw = await upload.read()
+        mime = media_svc.validate_note_file(upload.content_type, len(raw), upload.filename or "file")
+        key = media_svc.upload_bytes(
+            raw, filename=upload.filename or "file", content_type=mime, index=start_index + i
+        )
+        db.add(
+            NoteAttachment(
+                note_id=note.note_id,
+                clinic_id=user.clinic_id,
+                attachment_url=key,
+            )
+        )
+
+    db.commit()
+    db.refresh(note)
+    for key in keys_to_delete:
+        media_svc.delete_object(key)
+    return OkResponse(data=_serialize_note(db, note))
+
+
+@router.delete("/{client_id}/notes/{note_id}", response_model=OkResponse)
+def delete_note(
+    client_id: int,
+    note_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    """Soft-delete a note (visible=false). Attachments left in storage."""
+    _get_clinic_client(db, user.clinic_id, client_id)
+    note = _get_visible_note(db, user.clinic_id, client_id, note_id)
+    note.visible = False
+    db.commit()
+    return OkResponse(data={"note_id": note_id, "deleted": True})
+
+
 @router.delete("/{client_id}/notes/{note_id}/attachments/{attachment_id}", response_model=OkResponse)
 def delete_note_attachment(
     client_id: int,

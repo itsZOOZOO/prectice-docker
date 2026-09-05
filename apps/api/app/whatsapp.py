@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
-from datetime import date, time
+from datetime import date, time as time_of_day
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from app.models import Client, ClientPhone, ClinicSetting
 
 DEFAULT_WA_API_URL = "https://wa.aarogyams.com/api.php"
 DISABLED_MESSAGE = "WhatsApp messaging is not enabled for this clinic."
+PRESCRIPTION_WA_TTL = 7 * 24 * 3600  # 7 days
 
 
 def get_setting(db: Session, clinic_id: int, key: str, default: str = "") -> str:
@@ -135,7 +137,7 @@ def normalize_recipient(phone: str) -> str | None:
     return None
 
 
-def format_appointment_datetime(appt_date: date, appt_time: time) -> str:
+def format_appointment_datetime(appt_date: date, appt_time: time_of_day) -> str:
     # Match legacy: "Feb 9 Monday at 10:30 AM"
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -154,7 +156,7 @@ def send_appointment_confirm(
     phone: str,
     patient_name: str,
     appt_date: date,
-    appt_time: time,
+    appt_time: time_of_day,
 ) -> dict[str, Any]:
     if not is_enabled(db, clinic_id):
         return {"success": False, "message": DISABLED_MESSAGE, "response": None}
@@ -180,7 +182,7 @@ def send_appointment_confirm(
     return _post_template(db, clinic_id, payload)
 
 
-def format_missed_datetime(appt_date: date, appt_time: time) -> str:
+def format_missed_datetime(appt_date: date, appt_time: time_of_day) -> str:
     # Match PHP: "Mon, 05 Sep 2026 at 10:30 AM"
     weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -199,7 +201,7 @@ def send_missed_appointment_reminder(
     phone: str,
     patient_name: str,
     appt_date: date,
-    appt_time: time,
+    appt_time: time_of_day,
     clinic_contact: str,
 ) -> dict[str, Any]:
     if not is_enabled(db, clinic_id):
@@ -223,6 +225,195 @@ def send_missed_appointment_reminder(
         "contact_name": patient_name,
     }
     return _post_template(db, clinic_id, payload)
+
+
+def send_prescription(
+    db: Session,
+    *,
+    clinic_id: int,
+    user_id: int,
+    prescription_id: int,
+) -> dict[str, Any]:
+    """Generate letterhead PDF, upload to S3, send WA template with file_url."""
+    if not is_enabled(db, clinic_id):
+        return {"success": False, "message": DISABLED_MESSAGE, "response": None, "note_id": None}
+
+    from app import media as media_svc
+    from app.models import Note, Prescription
+    from app.prescription_pdf import generate_letterhead_pdf
+
+    rx = (
+        db.query(Prescription)
+        .filter(
+            Prescription.prescription_id == prescription_id,
+            Prescription.clinic_id == clinic_id,
+            Prescription.visible.is_(True),
+        )
+        .first()
+    )
+    if not rx:
+        return {"success": False, "message": "Prescription not found", "response": None, "note_id": None}
+
+    client = db.get(Client, rx.client_id)
+    if not client or client.clinic_id != clinic_id:
+        return {"success": False, "message": "Prescription not found", "response": None, "note_id": None}
+
+    phone = resolve_phone(form_phone=None, client=client, db=db)
+    recipient = normalize_recipient(phone) if phone else None
+    if not recipient:
+        return {
+            "success": False,
+            "message": "No WhatsApp-enabled phone number for this patient",
+            "response": None,
+            "note_id": None,
+        }
+
+    client_name = (client.name or "").strip() or "Patient"
+    safe_name = re.sub(r'[/\\:*?"<>|]+', "", client_name).strip() or "Patient"
+    pdf_name = f"{safe_name} - Prescription.pdf"
+
+    try:
+        pdf_bytes = generate_letterhead_pdf(db, clinic_id, prescription_id)
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "message": f"PDF failed: {e}", "response": None, "note_id": None}
+
+    try:
+        key = media_svc.upload_bytes_key(
+            pdf_bytes,
+            key=f"prescriptions/wa/{clinic_id}/{prescription_id}_{int(time.time())}.pdf",
+            content_type="application/pdf",
+        )
+        file_url = media_svc.presign_get(key, expires_in=PRESCRIPTION_WA_TTL)
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "message": f"Upload failed: {e}", "response": None, "note_id": None}
+
+    payload = {
+        "to": recipient,
+        "type": "template",
+        "template_name": "prescription_message",
+        "language": "en",
+        "file_url": file_url,
+        "name": pdf_name,
+        "template_params": [client_name],
+        "contact_name": client_name,
+    }
+    result = _post_template(db, clinic_id, payload)
+    note_id = None
+    if result.get("success"):
+        note = Note(
+            clinic_id=clinic_id,
+            client_id=client.client_id,
+            user_id=user_id,
+            body="Prescription message sent successfully.",
+        )
+        db.add(note)
+        db.commit()
+        db.refresh(note)
+        note_id = note.note_id
+    result["note_id"] = note_id
+    result["file_url"] = file_url
+    return result
+
+
+def send_warranty_card(
+    db: Session,
+    *,
+    clinic_id: int,
+    user_id: int,
+    card_id: int,
+) -> dict[str, Any]:
+    """Generate warranty PDF, upload to S3, send WA template wrnty_membrshp_plan_card."""
+    if not is_enabled(db, clinic_id):
+        return {"success": False, "message": DISABLED_MESSAGE, "response": None, "note_id": None}
+
+    from app import media as media_svc
+    from app.models import CardIssued, CardType, Note, ProductMembershipType
+    from app.warranty_pdf import generate_warranty_card_pdf
+
+    card = (
+        db.query(CardIssued)
+        .filter(
+            CardIssued.id == card_id,
+            CardIssued.clinic_id == clinic_id,
+            CardIssued.visible.is_(True),
+        )
+        .first()
+    )
+    if not card:
+        return {"success": False, "message": "Warranty card not found", "response": None, "note_id": None}
+
+    client = db.get(Client, card.client_id)
+    if not client or client.clinic_id != clinic_id:
+        return {"success": False, "message": "Warranty card not found", "response": None, "note_id": None}
+
+    phone = resolve_phone(form_phone=None, client=client, db=db)
+    recipient = normalize_recipient(phone) if phone else None
+    if not recipient:
+        return {
+            "success": False,
+            "message": "No WhatsApp-enabled phone number for this patient",
+            "response": None,
+            "note_id": None,
+        }
+
+    client_name = (client.name or "").strip() or "Patient"
+    card_type = db.get(CardType, card.card_type_id)
+    product = db.get(ProductMembershipType, card.product_id)
+    card_type_name = (card_type.type_name if card_type else "") or "Warranty card"
+    product_name = (product.name if product else "") or ""
+    units = max(1, int(card.number_of_units or 1))
+    product_membership = (
+        f"{product_name} ({units} units)" if product_name else f"{units} units"
+    )
+    period = f"{int(card.warranty_period or 0)} days"
+    pdf_name = f"Warranty Card - {re.sub(r'[/\\\\:*?\"<>|]+', '', client_name).strip() or 'Patient'}.pdf"
+
+    try:
+        pdf_bytes = generate_warranty_card_pdf(db, clinic_id, card_id)
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "message": f"PDF failed: {e}", "response": None, "note_id": None}
+
+    try:
+        key = media_svc.upload_bytes_key(
+            pdf_bytes,
+            key=f"warranty-cards/wa/{clinic_id}/{card_id}_{int(time.time())}.pdf",
+            content_type="application/pdf",
+        )
+        file_url = media_svc.presign_get(key, expires_in=PRESCRIPTION_WA_TTL)
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "message": f"Upload failed: {e}", "response": None, "note_id": None}
+
+    payload = {
+        "to": recipient,
+        "type": "template",
+        "template_name": "wrnty_membrshp_plan_card",
+        "language": "en",
+        "file_url": file_url,
+        "name": pdf_name,
+        "template_params": {
+            "client_print_name": client_name,
+            "card_type_name": card_type_name,
+            "product_membrshp_typ": product_membership,
+            "period": period,
+        },
+        "contact_name": client_name,
+    }
+    result = _post_template(db, clinic_id, payload)
+    note_id = None
+    if result.get("success"):
+        note = Note(
+            clinic_id=clinic_id,
+            client_id=client.client_id,
+            user_id=user_id,
+            body=f"Warranty card message sent successfully to {client_name}.",
+        )
+        db.add(note)
+        db.commit()
+        db.refresh(note)
+        note_id = note.note_id
+    result["note_id"] = note_id
+    result["file_url"] = file_url
+    return result
 
 
 def _post_template(db: Session, clinic_id: int, payload: dict[str, Any]) -> dict[str, Any]:

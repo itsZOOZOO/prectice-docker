@@ -113,6 +113,36 @@ def upload_bytes(data: bytes, *, filename: str, content_type: str, index: int = 
     return key
 
 
+def upload_bytes_key(data: bytes, *, key: str, content_type: str) -> str:
+    """Upload to an explicit S3 key (e.g. prescription PDFs for WhatsApp)."""
+    client, settings = require_s3()
+    cleaned = key.strip().lstrip("/")
+    if not cleaned:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid S3 key")
+    client.put_object(
+        Bucket=settings.s3_bucket,
+        Key=cleaned,
+        Body=data,
+        ContentType=content_type or "application/octet-stream",
+    )
+    return cleaned
+
+
+def presign_get(key: str, *, expires_in: int | None = None) -> str:
+    client, settings = require_s3()
+    cleaned = key.strip()
+    if cleaned.startswith("http://") or cleaned.startswith("https://"):
+        return cleaned
+    ttl = expires_in if expires_in is not None else settings.s3_url_ttl
+    # S3 max presign is 7 days for IAM user credentials
+    ttl = max(60, min(int(ttl), 604800))
+    return client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": settings.s3_bucket, "Key": cleaned},
+        ExpiresIn=ttl,
+    )
+
+
 def delete_object(key: str | None) -> None:
     if not key or key.startswith("http://") or key.startswith("https://"):
         return

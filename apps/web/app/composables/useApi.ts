@@ -26,7 +26,6 @@ export function useApi() {
         body: opts.body as BodyInit | Record<string, unknown> | undefined,
         query: opts.query as Record<string, string | number | boolean> | undefined,
         headers,
-        // Let browser set multipart boundary
         ...(isForm ? {} : {})
       })
       if (!res.ok) {
@@ -48,5 +47,37 @@ export function useApi() {
     }
   }
 
-  return { api }
+  /** Authenticated binary fetch (PDF, etc.) — not wrapped in { ok, data }. */
+  async function apiBlob(path: string, opts: {
+    method?: string
+    body?: unknown
+  } = {}): Promise<Blob> {
+    const headers: Record<string, string> = {}
+    if (auth.token.value) {
+      headers.Authorization = `Bearer ${auth.token.value}`
+    }
+    const isForm = typeof FormData !== 'undefined' && opts.body instanceof FormData
+    try {
+      return await $fetch<Blob>(`${config.public.apiBase}${path}`, {
+        method: (opts.method || 'GET') as 'GET',
+        body: opts.body as BodyInit | Record<string, unknown> | undefined,
+        headers,
+        responseType: 'blob',
+        ...(isForm ? {} : {})
+      })
+    } catch (err: unknown) {
+      const e = err as { data?: { detail?: string }, statusCode?: number, message?: string }
+      if (e.statusCode === 401) {
+        auth.clearSession()
+        if (import.meta.client) {
+          await navigateTo('/login')
+        }
+      }
+      const detail = e.data?.detail
+      if (typeof detail === 'string') throw new Error(detail)
+      throw new Error(e.message || 'Download failed')
+    }
+  }
+
+  return { api, apiBlob }
 }

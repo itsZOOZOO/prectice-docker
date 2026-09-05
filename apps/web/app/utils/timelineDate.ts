@@ -75,6 +75,20 @@ export function formatDateSeparator(iso: string) {
   return `${absolute} (${formatCalendarDayRelative(key)})`
 }
 
+/** Book/edit confirm: Mon 05 Sep 2026 (Today) */
+export function formatBookConfirmDate(dateStr: string) {
+  const key = /^\d{4}-\d{2}-\d{2}$/.test(dateStr.trim()) ? dateStr.trim() : dateKey(dateStr)
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: IST
+  }).formatToParts(new Date(`${key}T12:00:00+05:30`))
+  const absolute = `${pickDatePart(parts, 'weekday')} ${pickDatePart(parts, 'day')} ${pickDatePart(parts, 'month')} ${pickDatePart(parts, 'year')}`
+  return `${absolute} (${apptRelativeLabel(key)})`
+}
+
 /** Floating pill: Today / Yesterday / Fri, 12 Sep 2026 (3 days ago) */
 export function formatFloatingDate(isoOrKey: string) {
   const key = /^\d{4}-\d{2}-\d{2}$/.test(isoOrKey.trim()) ? isoOrKey.trim() : dateKey(isoOrKey)

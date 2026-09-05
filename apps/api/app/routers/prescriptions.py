@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_current_user
 from app.db import get_db
 from app.models import Client, MedicineTemplate, Prescription, PrescriptionItem, User
+from app.prescription_pdf import generate_print_pdf
 from app.schemas import (
     MedicineOut,
     OkResponse,
@@ -138,6 +140,94 @@ def create_prescription(
         .one()
     )
     return OkResponse(data=_rx_out(rx))
+
+
+@router.get("/clients/{client_id}/prescriptions/{prescription_id}/pdf")
+def prescription_pdf(
+    client_id: int,
+    prescription_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    """Print layout PDF using this clinic's pdf_templates print settings."""
+    _client(db, user.clinic_id, client_id)
+    rx = (
+        db.query(Prescription)
+        .filter(
+            Prescription.prescription_id == prescription_id,
+            Prescription.client_id == client_id,
+            Prescription.clinic_id == user.clinic_id,
+            Prescription.visible.is_(True),
+        )
+        .first()
+    )
+    if not rx:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prescription not found")
+    try:
+        pdf_bytes = generate_print_pdf(db, user.clinic_id, prescription_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"PDF failed: {exc}",
+        ) from exc
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="prescription-{prescription_id}.pdf"',
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@router.post("/clients/{client_id}/prescriptions/{prescription_id}/whatsapp", response_model=OkResponse)
+def send_prescription_whatsapp(
+    client_id: int,
+    prescription_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    """Send letterhead prescription PDF to the patient via WhatsApp."""
+    _client(db, user.clinic_id, client_id)
+    rx = (
+        db.query(Prescription)
+        .filter(
+            Prescription.prescription_id == prescription_id,
+            Prescription.client_id == client_id,
+            Prescription.clinic_id == user.clinic_id,
+            Prescription.visible.is_(True),
+        )
+        .first()
+    )
+    if not rx:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prescription not found")
+
+    from app import whatsapp as wa
+
+    result = wa.send_prescription(
+        db,
+        clinic_id=user.clinic_id,
+        user_id=user.user_id,
+        prescription_id=prescription_id,
+    )
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(result.get("message") or "WhatsApp send failed"),
+        )
+    return OkResponse(
+        data={
+            "prescription_id": prescription_id,
+            "wa_message_id": (result.get("response") or {}).get("wa_message_id")
+            if isinstance(result.get("response"), dict)
+            else None,
+            "note_id": result.get("note_id"),
+            "message": result.get("message") or "WhatsApp sent",
+        }
+    )
 
 
 @router.delete("/clients/{client_id}/prescriptions/{prescription_id}", response_model=OkResponse)

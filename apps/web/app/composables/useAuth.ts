@@ -54,6 +54,7 @@ export function useAuth() {
   }
 
   const isLoggedIn = computed(() => Boolean(token.value))
+  const isSuperadmin = computed(() => (user.value?.role || '').toLowerCase() === 'superadmin')
 
-  return { token, user, clinicName, isLoggedIn, hydrate, setSession, clearSession, logout }
+  return { token, user, clinicName, isLoggedIn, isSuperadmin, hydrate, setSession, clearSession, logout }
 }

@@ -16,10 +16,19 @@ type TimelineItem = {
   noteId?: number
   labCaseId?: number
   planId?: number
+  prescriptionId?: number
   appointmentId?: number
   appointmentDate?: string
   appointmentStatus?: string
-  kind: 'note' | 'bill' | 'receipt' | 'rx' | 'appointment' | 'task' | 'lab' | 'plan'
+  cardId?: number
+  uniqueCode?: string
+  warrantyPeriod?: number | null
+  billId?: number
+  billStatus?: string
+  billAmountDue?: number
+  billTotalPaid?: number
+  receiptId?: number
+  kind: 'note' | 'bill' | 'receipt' | 'rx' | 'appointment' | 'task' | 'lab' | 'plan' | 'warranty'
   title: string
   body?: string
   at: string
@@ -56,6 +65,13 @@ const uploadingPhoto = ref(false)
 const removingAttach = ref<string | null>(null)
 const saveOriginalQuality = ref(false)
 const processingFiles = ref(false)
+const expandedNoteId = ref<number | null>(null)
+const expandedRxId = ref<number | null>(null)
+const printingRxId = ref<number | null>(null)
+const sendingRxWaId = ref<number | null>(null)
+const noteEditOpen = ref(false)
+const noteEditTarget = ref<TimelineItem | null>(null)
+const deletingNoteId = ref<number | null>(null)
 
 const MAX_NOTE_FILES = 10
 const MAX_FILE_BYTES = 10 * 1024 * 1024
@@ -85,7 +101,7 @@ function clearNoteFiles() {
   saveOriginalQuality.value = false
 }
 
-const { api } = useApi()
+const { api, apiBlob } = useApi()
 const deskUrl = useDeskUrl()
 const patientId = computed(() => props.fixedPatientId ?? deskUrl.patientId.value)
 
@@ -175,6 +191,19 @@ const planViewOpen = ref(false)
 const planViewId = ref<number | null>(null)
 const planPricingOpen = ref(false)
 const planPricingId = ref<number | null>(null)
+const warrantyOpen = ref(false)
+const warrantyEditId = ref<number | null>(null)
+const expandedCardId = ref<number | null>(null)
+const cardActionBusy = ref(false)
+const sendingCardWaId = ref<number | null>(null)
+const expandedBillId = ref<number | null>(null)
+const expandedReceiptId = ref<number | null>(null)
+const billActionBusy = ref(false)
+const collectOpen = ref(false)
+const collectBillId = ref<number | null>(null)
+const collectAmountDue = ref(0)
+const collectBillTotal = ref(0)
+const collectTotalPaid = ref(0)
 const timelineEl = ref<HTMLElement | null>(null)
 const rxOpen = ref(false)
 const billOpen = ref(false)
@@ -199,6 +228,30 @@ function scrollTimelineToBottom() {
       if (el) el.scrollTop = el.scrollHeight
     })
   })
+}
+
+/** After expanding a foldable bubble, keep mid-list items in view; last item → scroll to end. */
+function afterExpandScroll(isLast: boolean, selector?: string) {
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (isLast) {
+          const el = timelineEl.value
+          if (el) el.scrollTop = el.scrollHeight
+          return
+        }
+        if (!selector || !timelineEl.value) return
+        const target = timelineEl.value.querySelector(selector) as HTMLElement | null
+        target?.scrollIntoView({ block: 'nearest', behavior: 'smooth', inline: 'nearest' })
+      })
+    })
+  })
+}
+
+function isLastTimelineItem(item: TimelineItem) {
+  const list = timeline.value
+  if (!list.length) return false
+  return list[list.length - 1].id === item.id
 }
 
 const floatingDateLabel = ref('')
@@ -243,14 +296,14 @@ onUnmounted(() => {
   if (floatingDateTimer) clearTimeout(floatingDateTimer)
 })
 
+/** Clock time only — day comes from separators / sticky date pill. */
 function formatWhen(iso: string) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit'
+  return d.toLocaleTimeString('en-IN', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
   })
 }
 
@@ -272,16 +325,17 @@ async function loadList() {
 async function loadChart(id: number) {
   loadingChart.value = true
   try {
-    const [c, notes, bills, receipts, rxs, appts, tasks, labs, plans] = await Promise.all([
+    const [c, notes, bills, receipts, rxs, appts, tasks, labs, plans, cards] = await Promise.all([
       api<Client>(`/clients/${id}`),
       api<{ note_id: number, body: string, created_at: string, author_name: string | null, attachments?: NoteAttachment[] }[]>(`/clients/${id}/notes`),
-      api<{ bill_id: number, amount_due: number, status: string, description: string | null, issued_at: string }[]>(`/clients/${id}/bills`),
-      api<{ receipt_id: number, amount: number, payment_mode: string, description: string | null, received_at: string }[]>(`/clients/${id}/receipts`),
+      api<{ bill_id: number, amount_due: number, status: string, description: string | null, issued_at: string, total_paid?: number }[]>(`/clients/${id}/bills`),
+      api<{ receipt_id: number, amount: number, payment_mode: string, description: string | null, received_at: string, bill_id?: number | null }[]>(`/clients/${id}/receipts`),
       api<{ prescription_id: number, prescription_date: string, notes: string | null, items: { medicine_name: string }[] }[]>(`/clients/${id}/prescriptions`),
       api<{ items: { appointment_id: number, appointment_date: string, appointment_time: string, status: string, doctor_name: string | null, service_name: string | null }[] }>('/appointments', { query: { client_id: id, limit: 50 } }),
       api<{ items: { task_id: number, task_description: string, status: string, due_date: string | null, created_at: string }[] }>('/tasks', { query: { client_id: id } }),
       api<{ cases: { case_id: number, case_ref: string, case_type: string | null, lab_name: string, stage: string, status: string, created_at: string, expected_return_date: string | null }[] }>(`/clients/${id}/lab-cases`),
-      api<{ plan_id: number, title: string, summary: string | null, total_cost: number | null, locked_at: string | null, created_at: string, photos: { url: string | null }[] }[]>(`/clients/${id}/treatment-plans`)
+      api<{ plan_id: number, title: string, summary: string | null, total_cost: number | null, locked_at: string | null, created_at: string, photos: { url: string | null }[] }[]>(`/clients/${id}/treatment-plans`),
+      api<{ card_id: number, type_name: string, unique_code: string, warranty_period: number, date_of_purchase: string, product_name: string, number_of_units: number }[]>(`/clients/${id}/warranty-cards`)
     ])
     client.value = c
     const totalBilling = bills.reduce((sum, b) => sum + Number(b.amount_due || 0), 0)
@@ -306,17 +360,30 @@ async function loadChart(id: number) {
       })
     }
     for (const b of bills) {
+      const status = normalizeBillStatus(b.status)
+      const paid = Number(b.total_paid || 0)
+      const due = Number(b.amount_due)
+      const balance = Math.max(0, due - paid)
+      const bodyParts = [
+        b.description || null,
+        status === 'partial' ? `Paid ₹${paid.toLocaleString('en-IN')} · Due ₹${balance.toLocaleString('en-IN')}` : null
+      ].filter(Boolean)
       items.push({
         id: `bill-${b.bill_id}`,
+        billId: b.bill_id,
+        billStatus: status,
+        billAmountDue: due,
+        billTotalPaid: paid,
         kind: 'bill',
-        title: `Bill · ₹${Number(b.amount_due).toLocaleString('en-IN')} · ${b.status}`,
-        body: b.description || undefined,
+        title: `Bill · ₹${due.toLocaleString('en-IN')} · ${formatBillStatus(status)}`,
+        body: bodyParts.join(' · ') || undefined,
         at: b.issued_at
       })
     }
     for (const r of receipts) {
       items.push({
         id: `rcpt-${r.receipt_id}`,
+        receiptId: r.receipt_id,
         kind: 'receipt',
         title: `Receipt · ₹${Number(r.amount).toLocaleString('en-IN')} · ${r.payment_mode}`,
         body: r.description || undefined,
@@ -326,6 +393,7 @@ async function loadChart(id: number) {
     for (const rx of rxs) {
       items.push({
         id: `rx-${rx.prescription_id}`,
+        prescriptionId: rx.prescription_id,
         kind: 'rx',
         title: `Rx · ${rx.items.map(i => i.medicine_name).join(', ') || 'Prescription'}`,
         body: rx.notes || undefined,
@@ -382,6 +450,20 @@ async function loadChart(id: number) {
         attachments: (p.photos || [])
           .filter(ph => ph.url)
           .map((ph, i) => ({ id: i, key: ph.url || '', url: ph.url }))
+      })
+    }
+    for (const card of cards) {
+      items.push({
+        id: `card-${card.card_id}`,
+        cardId: card.card_id,
+        uniqueCode: card.unique_code,
+        warrantyPeriod: card.warranty_period,
+        kind: 'warranty',
+        title: `Warranty · ${card.type_name || 'Card'}`,
+        body: [card.unique_code, card.product_name, card.warranty_period ? `${card.warranty_period} days` : null]
+          .filter(Boolean)
+          .join(' · ') || undefined,
+        at: `${card.date_of_purchase}T12:00:00`
       })
     }
     timeline.value = items.sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
@@ -576,6 +658,36 @@ async function removeAttachment(item: TimelineItem, att: NoteAttachment) {
   }
 }
 
+function toggleNoteExpand(item: TimelineItem) {
+  if (!item.noteId) return
+  const next = expandedNoteId.value === item.noteId ? null : item.noteId
+  expandedNoteId.value = next
+  if (next) afterExpandScroll(isLastTimelineItem(item), `[data-note-id="${next}"] [data-note-actions]`)
+}
+
+function openNoteEdit(item: TimelineItem) {
+  if (!item.noteId) return
+  expandedNoteId.value = null
+  noteEditTarget.value = item
+  noteEditOpen.value = true
+}
+
+async function deleteNote(item: TimelineItem) {
+  if (!client.value || !item.noteId || deletingNoteId.value) return
+  if (!window.confirm('Delete this note?')) return
+  deletingNoteId.value = item.noteId
+  try {
+    await api(`/clients/${client.value.client_id}/notes/${item.noteId}`, { method: 'DELETE' })
+    expandedNoteId.value = null
+    await loadChart(client.value.client_id)
+    toast.add({ title: 'Note deleted', color: 'success' })
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Delete failed', color: 'error' })
+  } finally {
+    deletingNoteId.value = null
+  }
+}
+
 function kindColor(kind: TimelineItem['kind']) {
   const map: Record<TimelineItem['kind'], string> = {
     note: 'border-l-[#0097A7]',
@@ -585,7 +697,8 @@ function kindColor(kind: TimelineItem['kind']) {
     appointment: 'border-l-sky-500',
     task: 'border-l-slate-400',
     lab: 'border-l-orange-500',
-    plan: 'border-l-teal-600'
+    plan: 'border-l-teal-600',
+    warranty: 'border-l-indigo-500'
   }
   return map[kind]
 }
@@ -609,13 +722,7 @@ function toggleApptExpand(item: TimelineItem) {
   const next = expandedApptId.value === item.appointmentId ? null : item.appointmentId
   expandedApptId.value = next
   if (!next) return
-  nextTick(() => {
-    requestAnimationFrame(() => {
-      const bubble = timelineEl.value?.querySelector(`[data-appt-id="${next}"]`) as HTMLElement | null
-      const actions = bubble?.querySelector('[data-appt-actions]') as HTMLElement | null
-      ;(actions || bubble)?.scrollIntoView({ block: 'nearest', behavior: 'smooth', inline: 'nearest' })
-    })
-  })
+  afterExpandScroll(isLastTimelineItem(item), `[data-appt-id="${next}"] [data-appt-actions]`)
 }
 
 function openBook() {
@@ -685,6 +792,158 @@ function openPlanCreate() {
   planCreateOpen.value = true
 }
 
+function openWarrantyCreate() {
+  warrantyEditId.value = null
+  warrantyOpen.value = true
+}
+
+function openWarrantyEdit(cardId: number) {
+  warrantyEditId.value = cardId
+  warrantyOpen.value = true
+}
+
+function toggleCardExpand(item: TimelineItem) {
+  if (!item.cardId) return
+  const next = expandedCardId.value === item.cardId ? null : item.cardId
+  expandedCardId.value = next
+  if (next) afterExpandScroll(isLastTimelineItem(item), `[data-card-id="${next}"] [data-card-actions]`)
+}
+
+async function sendCardWhatsApp(cardId: number, code?: string) {
+  if (!window.confirm(`Send warranty card ${code || `#${cardId}`} to the patient on WhatsApp? A PDF will be attached.`)) {
+    return
+  }
+  sendingCardWaId.value = cardId
+  try {
+    await api(`/warranty-cards/${cardId}/send-whatsapp`, { method: 'POST' })
+    toast.add({ title: 'Warranty card sent on WhatsApp', color: 'success' })
+    if (client.value) await loadChart(client.value.client_id)
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'WhatsApp send failed', color: 'error' })
+  } finally {
+    sendingCardWaId.value = null
+  }
+}
+
+async function deleteWarrantyCard(cardId: number, code?: string) {
+  if (!window.confirm(`Delete warranty card ${code || `#${cardId}`}? It will be removed from the timeline.`)) {
+    return
+  }
+  cardActionBusy.value = true
+  try {
+    await api(`/warranty-cards/${cardId}`, { method: 'DELETE' })
+    toast.add({ title: 'Warranty card deleted', color: 'success' })
+    expandedCardId.value = null
+    if (client.value) await loadChart(client.value.client_id)
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Delete failed', color: 'error' })
+  } finally {
+    cardActionBusy.value = false
+  }
+}
+
+function normalizeBillStatus(status: string | null | undefined) {
+  const s = (status || 'pending').toLowerCase()
+  return s === 'open' ? 'pending' : s
+}
+
+function formatBillStatus(status: string | null | undefined) {
+  const s = normalizeBillStatus(status)
+  if (s === 'partial') return 'Partial'
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+function canCollectBill(status: string | null | undefined) {
+  const s = normalizeBillStatus(status)
+  return s === 'pending' || s === 'partial'
+}
+
+function collectAmountForBill(amountDue: number, totalPaid: number, status: string | null | undefined) {
+  if (normalizeBillStatus(status) === 'partial') {
+    return Math.max(0, amountDue - totalPaid)
+  }
+  return amountDue
+}
+
+function toggleBillExpand(item: TimelineItem) {
+  if (!item.billId) return
+  const next = expandedBillId.value === item.billId ? null : item.billId
+  expandedBillId.value = next
+  if (next) afterExpandScroll(isLastTimelineItem(item), `[data-bill-id="${next}"] [data-bill-actions]`)
+}
+
+function toggleReceiptExpand(item: TimelineItem) {
+  if (!item.receiptId) return
+  const next = expandedReceiptId.value === item.receiptId ? null : item.receiptId
+  expandedReceiptId.value = next
+  if (next) afterExpandScroll(isLastTimelineItem(item), `[data-receipt-id="${next}"] [data-receipt-actions]`)
+}
+
+function openCollect(item: TimelineItem) {
+  if (!item.billId) return
+  collectBillId.value = item.billId
+  collectBillTotal.value = item.billAmountDue || 0
+  collectTotalPaid.value = item.billTotalPaid || 0
+  collectAmountDue.value = collectAmountForBill(
+    item.billAmountDue || 0,
+    item.billTotalPaid || 0,
+    item.billStatus
+  )
+  collectOpen.value = true
+}
+
+async function cancelBill(item: TimelineItem) {
+  if (!item.billId || billActionBusy.value) return
+  if (!window.confirm(
+    `Cancel bill #${item.billId} for ₹${item.billAmountDue}? Linked receipts stay on the timeline (unlinked from this bill).`
+  )) return
+  billActionBusy.value = true
+  try {
+    await api(`/bills/${item.billId}/cancel`, { method: 'POST' })
+    toast.add({ title: 'Bill cancelled', color: 'success' })
+    expandedBillId.value = null
+    if (client.value) await loadChart(client.value.client_id)
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Cancel failed', color: 'error' })
+  } finally {
+    billActionBusy.value = false
+  }
+}
+
+async function deleteBill(item: TimelineItem) {
+  if (!item.billId || billActionBusy.value) return
+  if (!window.confirm(
+    `Permanently delete bill #${item.billId}? Linked receipts stay as orphaned payments. This cannot be undone.`
+  )) return
+  billActionBusy.value = true
+  try {
+    await api(`/bills/${item.billId}`, { method: 'DELETE' })
+    toast.add({ title: 'Bill deleted', color: 'success' })
+    expandedBillId.value = null
+    if (client.value) await loadChart(client.value.client_id)
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Delete failed', color: 'error' })
+  } finally {
+    billActionBusy.value = false
+  }
+}
+
+async function deleteReceipt(item: TimelineItem) {
+  if (!item.receiptId || billActionBusy.value) return
+  if (!window.confirm(`Delete this receipt? It will be removed from the timeline.`)) return
+  billActionBusy.value = true
+  try {
+    await api(`/receipts/${item.receiptId}`, { method: 'DELETE' })
+    toast.add({ title: 'Receipt deleted', color: 'success' })
+    expandedReceiptId.value = null
+    if (client.value) await loadChart(client.value.client_id)
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Delete failed', color: 'error' })
+  } finally {
+    billActionBusy.value = false
+  }
+}
+
 function openPlanView(item: TimelineItem) {
   if (!item.planId) return
   planViewId.value = item.planId
@@ -748,7 +1007,7 @@ const rxTemplateCounts = computed(() => {
   return counts
 })
 
-async function saveRx() {
+async function saveRx(printAfter = false) {
   if (!client.value) return
   const items = rxItems.value
     .map(r => ({
@@ -766,7 +1025,7 @@ async function saveRx() {
   }
   savingRx.value = true
   try {
-    await api(`/clients/${client.value.client_id}/prescriptions`, {
+    const created = await api<{ prescription_id: number }>(`/clients/${client.value.client_id}/prescriptions`, {
       method: 'POST',
       body: { notes: rxNotes.value.trim() || null, items }
     })
@@ -774,10 +1033,70 @@ async function saveRx() {
     toast.add({ title: 'Prescription saved', color: 'success' })
     await loadChart(client.value.client_id)
     scrollTimelineToBottom()
+    if (printAfter && created.prescription_id) {
+      await printPrescription(created.prescription_id)
+    }
   } catch (e: unknown) {
     toast.add({ title: e instanceof Error ? e.message : 'Failed', color: 'error' })
   } finally {
     savingRx.value = false
+  }
+}
+
+async function printPrescription(prescriptionId: number) {
+  if (!client.value || printingRxId.value) return
+  printingRxId.value = prescriptionId
+  try {
+    const blob = await apiBlob(`/clients/${client.value.client_id}/prescriptions/${prescriptionId}/pdf`)
+    const url = URL.createObjectURL(blob)
+    const win = window.open(url, '_blank', 'noopener,noreferrer')
+    if (!win) {
+      // Popup blocked — force download
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `prescription-${prescriptionId}.pdf`
+      a.rel = 'noopener'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    }
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Print failed', color: 'error' })
+  } finally {
+    printingRxId.value = null
+  }
+}
+
+function toggleRxExpand(item: TimelineItem) {
+  if (!item.prescriptionId) return
+  const next = expandedRxId.value === item.prescriptionId ? null : item.prescriptionId
+  expandedRxId.value = next
+  if (next) afterExpandScroll(isLastTimelineItem(item), `[data-rx-id="${next}"] [data-rx-actions]`)
+}
+
+async function sendRxWhatsApp(prescriptionId: number) {
+  if (!client.value || sendingRxWaId.value) return
+  if (
+    !window.confirm(
+      'Send this prescription to the patient on WhatsApp? A letterhead PDF will be attached.'
+    )
+  ) {
+    return
+  }
+  sendingRxWaId.value = prescriptionId
+  try {
+    await api(`/clients/${client.value.client_id}/prescriptions/${prescriptionId}/whatsapp`, {
+      method: 'POST'
+    })
+    toast.add({ title: 'Prescription sent on WhatsApp', color: 'success' })
+    expandedRxId.value = null
+    await loadChart(client.value.client_id)
+    scrollTimelineToBottom()
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'WhatsApp failed', color: 'error' })
+  } finally {
+    sendingRxWaId.value = null
   }
 }
 
@@ -1155,9 +1474,15 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                 </div>
               </div>
 
-              <div class="mx-2.5 mb-4 rounded-xl border border-dashed border-slate-300 bg-white/60 px-4 py-3.5">
+              <div class="mx-2.5 mb-4 rounded-xl border border-slate-200 bg-white px-4 py-3.5">
                 <p class="m-0 text-xs font-semibold uppercase tracking-wider text-slate-400">Warranty</p>
-                <p class="mt-2 text-sm text-slate-400">Add warranty card — coming soon</p>
+                <button
+                  type="button"
+                  class="mt-2 w-full rounded-xl bg-[#0097A7] px-3 py-2.5 text-sm font-semibold text-white active:bg-[#00838f]"
+                  @click="openWarrantyCreate"
+                >
+                  Add warranty card
+                </button>
               </div>
             </div>
 
@@ -1212,47 +1537,86 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                   <!-- Note bubble -->
                   <div
                     v-if="item.kind === 'note'"
-                    class="w-full rounded-2xl bg-[#0097A7] px-4 py-3 text-white shadow-sm"
+                    :data-note-id="item.noteId"
+                    class="w-full overflow-hidden rounded-2xl bg-[#0097A7] text-white shadow-sm"
                   >
-                    <p v-if="item.body" class="whitespace-pre-wrap text-sm leading-relaxed">{{ item.body }}</p>
-                    <div v-if="item.attachments?.length" class="mt-2 flex flex-wrap gap-2">
-                      <div
-                        v-for="(att, idx) in item.attachments"
-                        :key="att.id ?? `${item.id}-a-${idx}`"
-                        class="group relative"
-                      >
-                        <button
-                          v-if="att.url && isImageAtt(att)"
-                          type="button"
-                          class="block overflow-hidden rounded-lg border border-white/30"
-                          @click="lightbox = att.url"
+                    <div class="px-4 py-3">
+                      <p v-if="item.body" class="whitespace-pre-wrap text-sm leading-relaxed">{{ item.body }}</p>
+                      <div v-if="item.attachments?.length" class="mt-2 flex flex-wrap gap-2">
+                        <div
+                          v-for="(att, idx) in item.attachments"
+                          :key="att.id ?? `${item.id}-a-${idx}`"
+                          class="group relative"
                         >
-                          <img :src="att.url" alt="" class="h-20 w-20 object-cover">
-                        </button>
-                        <a
-                          v-else-if="att.url"
-                          :href="att.url"
-                          target="_blank"
-                          rel="noopener"
-                          class="inline-block rounded bg-white/15 px-2 py-1 text-[11px] text-white underline"
-                        >
-                          {{ fileLabel(att.key) }}
-                        </a>
-                        <button
-                          v-if="att.id != null"
-                          type="button"
-                          class="absolute -right-1 -top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-black/70 text-[10px] text-white group-hover:flex"
-                          :disabled="removingAttach === `${item.noteId}-${att.id}`"
-                          title="Remove"
-                          @click.stop="removeAttachment(item, att)"
-                        >
-                          ×
-                        </button>
+                          <button
+                            v-if="att.url && isImageAtt(att)"
+                            type="button"
+                            class="block overflow-hidden rounded-lg border border-white/30"
+                            @click="lightbox = att.url"
+                          >
+                            <img :src="att.url" alt="" class="h-20 w-20 object-cover">
+                          </button>
+                          <a
+                            v-else-if="att.url"
+                            :href="att.url"
+                            target="_blank"
+                            rel="noopener"
+                            class="inline-block rounded bg-white/15 px-2 py-1 text-[11px] text-white underline"
+                          >
+                            {{ fileLabel(att.key) }}
+                          </a>
+                          <button
+                            v-if="att.id != null"
+                            type="button"
+                            class="absolute -right-1 -top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-black/70 text-[10px] text-white group-hover:flex"
+                            :disabled="removingAttach === `${item.noteId}-${att.id}`"
+                            title="Remove"
+                            @click.stop="removeAttachment(item, att)"
+                          >
+                            ×
+                          </button>
+                        </div>
                       </div>
+                      <button
+                        type="button"
+                        class="mt-2 flex w-full items-center justify-end gap-1 text-right text-[11px] text-white/75 hover:text-white"
+                        :aria-expanded="expandedNoteId === item.noteId"
+                        @click="toggleNoteExpand(item)"
+                      >
+                        <span>
+                          <span v-if="item.author">{{ item.author }} · </span>{{ formatWhen(item.at) }}
+                        </span>
+                        <UIcon
+                          name="i-lucide-chevron-down"
+                          class="h-3.5 w-3.5 transition"
+                          :class="expandedNoteId === item.noteId ? 'rotate-180' : ''"
+                        />
+                      </button>
                     </div>
-                    <p class="mt-2 text-right text-[11px] text-white/75">
-                      <span v-if="item.author">{{ item.author }} · </span>{{ formatWhen(item.at) }}
-                    </p>
+                    <div
+                      v-if="expandedNoteId === item.noteId"
+                      data-note-actions
+                      class="grid grid-cols-2 gap-px border-t border-white/20 bg-slate-100"
+                      @click.stop
+                    >
+                      <button
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-[#00838f] hover:bg-[#e0f7fa]"
+                        @click="openNoteEdit(item)"
+                      >
+                        <UIcon name="i-lucide-pencil" class="h-3.5 w-3.5" />
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                        :disabled="deletingNoteId === item.noteId"
+                        @click="deleteNote(item)"
+                      >
+                        <UIcon name="i-lucide-trash-2" class="h-3.5 w-3.5" />
+                        Delete
+                      </button>
+                    </div>
                   </div>
 
                   <!-- Appointment bubble (expandable when manageable) -->
@@ -1323,6 +1687,231 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                         class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
                         :disabled="apptActionBusy"
                         @click="deleteAppointment(item)"
+                      >
+                        <UIcon name="i-lucide-trash-2" class="h-3.5 w-3.5" />
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Prescription bubble -->
+                  <div
+                    v-else-if="item.kind === 'rx'"
+                    :data-rx-id="item.prescriptionId"
+                    class="overflow-hidden rounded-lg border border-slate-200 border-l-4 bg-white"
+                    :class="kindColor(item.kind)"
+                  >
+                    <button
+                      type="button"
+                      class="flex w-full cursor-pointer items-start justify-between gap-2 px-3 py-2 text-left hover:bg-slate-50"
+                      @click="toggleRxExpand(item)"
+                    >
+                      <div class="min-w-0">
+                        <p class="text-sm font-medium text-[#1C2B35]">{{ item.title }}</p>
+                        <p v-if="item.body" class="mt-0.5 truncate text-xs text-slate-500">{{ item.body }}</p>
+                      </div>
+                      <div class="flex shrink-0 items-center gap-1">
+                        <p class="text-[11px] text-slate-400">{{ formatWhen(item.at) }}</p>
+                        <UIcon
+                          name="i-lucide-chevron-down"
+                          class="h-3.5 w-3.5 text-slate-400 transition"
+                          :class="expandedRxId === item.prescriptionId ? 'rotate-180' : ''"
+                        />
+                      </div>
+                    </button>
+                    <div
+                      v-if="expandedRxId === item.prescriptionId"
+                      data-rx-actions
+                      class="grid gap-px border-t border-slate-200 bg-slate-100"
+                      :class="waEnabled ? 'grid-cols-2' : 'grid-cols-1'"
+                      @click.stop
+                    >
+                      <button
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-[#00838f] hover:bg-[#e0f7fa] disabled:opacity-50"
+                        :disabled="printingRxId === item.prescriptionId || sendingRxWaId === item.prescriptionId"
+                        @click="item.prescriptionId && printPrescription(item.prescriptionId)"
+                      >
+                        <UIcon name="i-lucide-printer" class="h-3.5 w-3.5" />
+                        {{ printingRxId === item.prescriptionId ? 'Printing…' : 'Print' }}
+                      </button>
+                      <button
+                        v-if="waEnabled"
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                        :disabled="printingRxId === item.prescriptionId || sendingRxWaId === item.prescriptionId"
+                        @click="item.prescriptionId && sendRxWhatsApp(item.prescriptionId)"
+                      >
+                        <UIcon name="i-lucide-message-circle" class="h-3.5 w-3.5" />
+                        {{ sendingRxWaId === item.prescriptionId ? 'Sending…' : 'WhatsApp' }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Warranty card bubble -->
+                  <div
+                    v-else-if="item.kind === 'warranty'"
+                    :data-card-id="item.cardId"
+                    class="overflow-hidden rounded-lg border border-slate-200 border-l-4 bg-white"
+                    :class="kindColor(item.kind)"
+                  >
+                    <button
+                      type="button"
+                      class="flex w-full cursor-pointer items-start justify-between gap-2 px-3 py-2 text-left hover:bg-slate-50"
+                      @click="toggleCardExpand(item)"
+                    >
+                      <div class="min-w-0">
+                        <p class="text-sm font-medium text-[#1C2B35]">{{ item.title }}</p>
+                        <p v-if="item.body" class="mt-0.5 truncate text-xs text-slate-500">{{ item.body }}</p>
+                      </div>
+                      <div class="flex shrink-0 items-center gap-1">
+                        <p class="text-[11px] text-slate-400">{{ formatWhen(item.at) }}</p>
+                        <UIcon
+                          name="i-lucide-chevron-down"
+                          class="h-3.5 w-3.5 text-slate-400 transition"
+                          :class="expandedCardId === item.cardId ? 'rotate-180' : ''"
+                        />
+                      </div>
+                    </button>
+                    <div
+                      v-if="expandedCardId === item.cardId"
+                      data-card-actions
+                      class="grid gap-px border-t border-slate-200 bg-slate-100"
+                      :class="waEnabled ? 'grid-cols-3' : 'grid-cols-2'"
+                      @click.stop
+                    >
+                      <button
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-[#00838f] hover:bg-[#e0f7fa] disabled:opacity-50"
+                        :disabled="cardActionBusy || sendingCardWaId === item.cardId"
+                        @click="item.cardId && openWarrantyEdit(item.cardId)"
+                      >
+                        <UIcon name="i-lucide-pencil" class="h-3.5 w-3.5" />
+                        Edit
+                      </button>
+                      <button
+                        v-if="waEnabled"
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                        :disabled="cardActionBusy || sendingCardWaId === item.cardId"
+                        @click="item.cardId && sendCardWhatsApp(item.cardId, item.uniqueCode)"
+                      >
+                        <UIcon name="i-lucide-message-circle" class="h-3.5 w-3.5" />
+                        {{ sendingCardWaId === item.cardId ? 'Sending…' : 'WhatsApp' }}
+                      </button>
+                      <button
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                        :disabled="cardActionBusy || sendingCardWaId === item.cardId"
+                        @click="item.cardId && deleteWarrantyCard(item.cardId, item.uniqueCode)"
+                      >
+                        <UIcon name="i-lucide-trash-2" class="h-3.5 w-3.5" />
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Bill bubble -->
+                  <div
+                    v-else-if="item.kind === 'bill'"
+                    :data-bill-id="item.billId"
+                    class="overflow-hidden rounded-lg border border-slate-200 border-l-4 bg-white"
+                    :class="kindColor(item.kind)"
+                  >
+                    <button
+                      type="button"
+                      class="flex w-full cursor-pointer items-start justify-between gap-2 px-3 py-2 text-left hover:bg-slate-50"
+                      @click="toggleBillExpand(item)"
+                    >
+                      <div class="min-w-0">
+                        <p class="text-sm font-medium text-[#1C2B35]">{{ item.title }}</p>
+                        <p v-if="item.body" class="mt-0.5 truncate text-xs text-slate-500">{{ item.body }}</p>
+                      </div>
+                      <div class="flex shrink-0 items-center gap-1">
+                        <p class="text-[11px] text-slate-400">{{ formatWhen(item.at) }}</p>
+                        <UIcon
+                          name="i-lucide-chevron-down"
+                          class="h-3.5 w-3.5 text-slate-400 transition"
+                          :class="expandedBillId === item.billId ? 'rotate-180' : ''"
+                        />
+                      </div>
+                    </button>
+                    <div
+                      v-if="expandedBillId === item.billId"
+                      data-bill-actions
+                      class="grid gap-px border-t border-slate-200 bg-slate-100"
+                      :class="canCollectBill(item.billStatus) ? 'grid-cols-2' : 'grid-cols-1'"
+                      @click.stop
+                    >
+                      <button
+                        v-if="canCollectBill(item.billStatus)"
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                        :disabled="billActionBusy"
+                        @click="openCollect(item)"
+                      >
+                        <UIcon name="i-lucide-banknote" class="h-3.5 w-3.5" />
+                        Collect
+                      </button>
+                      <button
+                        v-if="normalizeBillStatus(item.billStatus) !== 'cancelled'"
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                        :disabled="billActionBusy"
+                        @click="cancelBill(item)"
+                      >
+                        <UIcon name="i-lucide-ban" class="h-3.5 w-3.5" />
+                        Cancel
+                      </button>
+                      <button
+                        v-if="normalizeBillStatus(item.billStatus) === 'cancelled'"
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                        :disabled="billActionBusy"
+                        @click="deleteBill(item)"
+                      >
+                        <UIcon name="i-lucide-trash-2" class="h-3.5 w-3.5" />
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Receipt bubble -->
+                  <div
+                    v-else-if="item.kind === 'receipt'"
+                    :data-receipt-id="item.receiptId"
+                    class="overflow-hidden rounded-lg border border-slate-200 border-l-4 bg-white"
+                    :class="kindColor(item.kind)"
+                  >
+                    <button
+                      type="button"
+                      class="flex w-full cursor-pointer items-start justify-between gap-2 px-3 py-2 text-left hover:bg-slate-50"
+                      @click="toggleReceiptExpand(item)"
+                    >
+                      <div class="min-w-0">
+                        <p class="text-sm font-medium text-[#1C2B35]">{{ item.title }}</p>
+                        <p v-if="item.body" class="mt-0.5 truncate text-xs text-slate-500">{{ item.body }}</p>
+                      </div>
+                      <div class="flex shrink-0 items-center gap-1">
+                        <p class="text-[11px] text-slate-400">{{ formatWhen(item.at) }}</p>
+                        <UIcon
+                          name="i-lucide-chevron-down"
+                          class="h-3.5 w-3.5 text-slate-400 transition"
+                          :class="expandedReceiptId === item.receiptId ? 'rotate-180' : ''"
+                        />
+                      </div>
+                    </button>
+                    <div
+                      v-if="expandedReceiptId === item.receiptId"
+                      data-receipt-actions
+                      class="grid grid-cols-1 gap-px border-t border-slate-200 bg-slate-100"
+                      @click.stop
+                    >
+                      <button
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                        :disabled="billActionBusy"
+                        @click="deleteReceipt(item)"
                       >
                         <UIcon name="i-lucide-trash-2" class="h-3.5 w-3.5" />
                         Delete
@@ -1454,42 +2043,53 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
               <p v-if="processingFiles" class="text-[11px] text-slate-400">Compressing images…</p>
             </form>
 
-            <div class="mt-2 grid grid-cols-4 gap-2">
+            <div class="mt-2 flex gap-2">
+              <div class="grid min-w-0 flex-1 grid-cols-4 gap-2">
+                <button
+                  type="button"
+                  class="flex flex-col items-center justify-center gap-0.5 rounded-xl bg-[#0097A7] py-2 text-white hover:bg-[#00838f]"
+                  title="Add prescription"
+                  @click="openRx"
+                >
+                  <UIcon name="i-lucide-pill" class="h-5 w-5" />
+                  <span class="text-[10px] font-semibold">Rx</span>
+                </button>
+                <button
+                  type="button"
+                  class="flex flex-col items-center justify-center gap-0.5 rounded-xl border border-[#0097A7] bg-[#e0f7fa] py-2 text-[#00838f] hover:bg-[#b2ebf2]"
+                  title="Add bill"
+                  @click="openBill"
+                >
+                  <UIcon name="i-lucide-banknote" class="h-5 w-5" />
+                  <span class="text-[10px] font-semibold">Bill</span>
+                </button>
+                <button
+                  type="button"
+                  class="flex flex-col items-center justify-center gap-0.5 rounded-xl border border-[#0097A7] bg-[#e0f7fa] py-2 text-[#00838f] hover:bg-[#b2ebf2]"
+                  title="Treatment plan"
+                  @click="openPlanCreate"
+                >
+                  <UIcon name="i-lucide-stethoscope" class="h-5 w-5" />
+                  <span class="text-[10px] font-semibold">Plan</span>
+                </button>
+                <button
+                  type="button"
+                  class="flex flex-col items-center justify-center gap-0.5 rounded-xl border border-[#0097A7] bg-[#e0f7fa] py-2 text-[#00838f] hover:bg-[#b2ebf2]"
+                  title="Lab case"
+                  @click="labCreateOpen = true"
+                >
+                  <UIcon name="i-lucide-flask-conical" class="h-5 w-5" />
+                  <span class="text-[10px] font-semibold">Lab</span>
+                </button>
+              </div>
               <button
                 type="button"
-                class="flex flex-col items-center justify-center gap-0.5 rounded-xl bg-[#0097A7] py-2 text-white hover:bg-[#00838f]"
-                title="Add prescription"
-                @click="openRx"
+                class="flex h-[52px] w-14 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-slate-500 to-slate-600 text-white shadow-[0_2px_8px_rgba(108,117,125,0.35)] transition hover:from-slate-600 hover:to-slate-700"
+                title="AI summarise patient history"
+                aria-label="AI summarise patient history"
+                @click="toast.add({ title: 'AI coming soon', color: 'neutral' })"
               >
-                <UIcon name="i-lucide-pill" class="h-5 w-5" />
-                <span class="text-[10px] font-semibold">Rx</span>
-              </button>
-              <button
-                type="button"
-                class="flex flex-col items-center justify-center gap-0.5 rounded-xl border border-[#0097A7] bg-[#e0f7fa] py-2 text-[#00838f] hover:bg-[#b2ebf2]"
-                title="Add bill"
-                @click="openBill"
-              >
-                <UIcon name="i-lucide-banknote" class="h-5 w-5" />
-                <span class="text-[10px] font-semibold">Bill</span>
-              </button>
-              <button
-                type="button"
-                class="flex flex-col items-center justify-center gap-0.5 rounded-xl border border-[#0097A7] bg-[#e0f7fa] py-2 text-[#00838f] hover:bg-[#b2ebf2]"
-                title="Treatment plan"
-                @click="openPlanCreate"
-              >
-                <UIcon name="i-lucide-stethoscope" class="h-5 w-5" />
-                <span class="text-[10px] font-semibold">Plan</span>
-              </button>
-              <button
-                type="button"
-                class="flex flex-col items-center justify-center gap-0.5 rounded-xl border border-[#0097A7] bg-[#e0f7fa] py-2 text-[#00838f] hover:bg-[#b2ebf2]"
-                title="Lab case"
-                @click="labCreateOpen = true"
-              >
-                <UIcon name="i-lucide-flask-conical" class="h-5 w-5" />
-                <span class="text-[10px] font-semibold">Lab</span>
+                <UIcon name="i-lucide-bot" class="h-6 w-6" />
               </button>
             </div>
             </div>
@@ -1508,6 +2108,16 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
       @booked="() => { editAppointmentId = null; client && loadChart(client.client_id) }"
       @saved="() => { editAppointmentId = null; expandedApptId = null; client && loadChart(client.client_id) }"
       @update:open="(v) => { if (!v) editAppointmentId = null }"
+    />
+    <DeskNoteEditModal
+      v-model:open="noteEditOpen"
+      :client-id="client?.client_id ?? null"
+      :note-id="noteEditTarget?.noteId ?? null"
+      :initial-body="noteEditTarget?.body || ''"
+      :initial-datetime="noteEditTarget?.at || ''"
+      :initial-attachments="noteEditTarget?.attachments || []"
+      @saved="() => { noteEditTarget = null; client && loadChart(client.client_id) }"
+      @update:open="(v) => { if (!v) noteEditTarget = null }"
     />
     <DeskLabCreateModal
       v-model:open="labCreateOpen"
@@ -1539,10 +2149,27 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
       :plan-id="planPricingId"
       @saved="() => { client && loadChart(client.client_id) }"
     />
+    <DeskWarrantyCardModal
+      v-model:open="warrantyOpen"
+      :client-id="client?.client_id ?? null"
+      :card-id="warrantyEditId"
+      @saved="() => { warrantyEditId = null; client && loadChart(client.client_id).then(() => scrollTimelineToBottom()) }"
+      @update:open="(v) => { if (!v) warrantyEditId = null }"
+    />
+    <DeskCollectBillModal
+      v-model:open="collectOpen"
+      :bill-id="collectBillId"
+      :amount-due="collectAmountDue"
+      :bill-total="collectBillTotal"
+      :total-paid="collectTotalPaid"
+      :client-name="client?.name"
+      @saved="() => { collectBillId = null; expandedBillId = null; client && loadChart(client.client_id).then(() => scrollTimelineToBottom()) }"
+      @update:open="(v) => { if (!v) collectBillId = null }"
+    />
 
     <UModal v-model:open="rxOpen" title="New prescription">
       <template #body>
-        <form class="space-y-3" @submit.prevent="saveRx">
+        <form class="space-y-3" @submit.prevent="saveRx(false)">
           <div class="flex items-center justify-between gap-2">
             <p class="text-sm font-semibold text-slate-800">Medicines</p>
             <span
@@ -1624,9 +2251,26 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
           <UFormField label="Notes">
             <UTextarea v-model="rxNotes" class="w-full" :rows="2" />
           </UFormField>
-          <div class="flex justify-end gap-2">
-            <UButton color="neutral" variant="ghost" type="button" @click="rxOpen = false">Cancel</UButton>
-            <UButton type="submit" class="bg-[#0097A7]" :loading="savingRx">Save Rx</UButton>
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <UButton
+              type="button"
+              class="bg-rose-500 hover:bg-rose-600"
+              :loading="savingRx"
+              :disabled="!rxItems.length"
+              @click="saveRx(true)"
+            >
+              <UIcon name="i-lucide-printer" class="h-4 w-4" />
+              Print
+            </UButton>
+            <UButton
+              type="button"
+              class="bg-[#0097A7]"
+              :loading="savingRx"
+              :disabled="!rxItems.length"
+              @click="saveRx(false)"
+            >
+              Save
+            </UButton>
           </div>
         </form>
       </template>

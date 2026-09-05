@@ -55,3 +55,13 @@ def get_current_user(
     if not user or not user.active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User inactive or missing")
     return user
+
+
+def is_superadmin(user: User) -> bool:
+    return (user.role or "").strip().lower() == "superadmin"
+
+
+def require_superadmin(user: Annotated[User, Depends(get_current_user)]) -> User:
+    if not is_superadmin(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Superadmin only")
+    return user
