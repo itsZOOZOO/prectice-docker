@@ -144,6 +144,7 @@ body {
   background: #fff;
 }
 
+.mobile-shell > main {
   flex: 1 1 0%;
   flex-basis: 0;
   /* Critical: stop flex item growing with content on Android Chrome */
