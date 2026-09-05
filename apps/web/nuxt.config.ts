@@ -20,6 +20,44 @@ export default defineNuxtConfig({
     preference: 'light'
   },
 
+  // Bundle Lucide locally so icons work on phone / offline (no Iconify CDN fetch).
+  icon: {
+    mode: 'svg',
+    serverBundle: 'local',
+    clientBundle: {
+      scan: true,
+      sizeLimitKb: 512,
+      // Hard-include mobile + timeline icons (scan can miss some script usages).
+      icons: [
+        'lucide:users',
+        'lucide:calendar',
+        'lucide:check-square',
+        'lucide:flask-conical',
+        'lucide:ellipsis-vertical',
+        'lucide:settings',
+        'lucide:arrow-left',
+        'lucide:home',
+        'lucide:phone',
+        'lucide:message-circle',
+        'lucide:pill',
+        'lucide:banknote',
+        'lucide:stethoscope',
+        'lucide:paperclip',
+        'lucide:send',
+        'lucide:clock',
+        'lucide:pencil',
+        'lucide:trash-2',
+        'lucide:chevron-down',
+        'lucide:x',
+        'lucide:plus',
+        'lucide:user-plus',
+        'lucide:calendar-plus',
+        'lucide:chevron-left',
+        'lucide:chevron-right'
+      ]
+    }
+  },
+
   fonts: {
     families: [
       { name: 'Source Sans 3', provider: 'google' }
