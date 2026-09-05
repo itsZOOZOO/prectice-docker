@@ -346,8 +346,10 @@ const tabCount = computed(() => 2 + dashboardFilters.value.length)
 
     <button
       type="button"
-      class="absolute bottom-6 right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-[#0097A7] text-2xl text-white shadow-lg"
+      class="fixed right-[max(1.25rem,calc((100vw-480px)/2+1.25rem))] z-50 flex h-14 w-14 items-center justify-center rounded-full bg-[#0097A7] text-2xl text-white shadow-[0_4px_12px_rgba(0,151,167,0.4)]"
+      style="bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px))"
       title="Add patient"
+      aria-label="Add patient"
       @click="addOpen = true"
     >
       +
