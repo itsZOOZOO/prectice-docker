@@ -16,8 +16,16 @@ class Settings(BaseSettings):
     app_name: str = "Prectice"
     database_url: str = "postgresql+psycopg://prectice:prectice@127.0.0.1:5432/prectice"
     jwt_secret: str = "change-me"
-    jwt_expire_hours: int = 72
+    # Session JWT when "Remember me" is unchecked (hours)
+    jwt_expire_hours: int = 12
+    # Session JWT when "Remember me" is checked (hours) — default 30 days
+    jwt_remember_expire_hours: int = 720
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    # Google SSO via auth.pratikp.com (secret stays server-side)
+    sso_auth_base_url: str = "https://auth.pratikp.com"
+    sso_app_slug: str = "navapp-dental"
+    sso_app_secret: str = ""
     # Optional regex for preview hosts (e.g. https://.*\.vercel\.app$)
     cors_origin_regex: str = ""
 

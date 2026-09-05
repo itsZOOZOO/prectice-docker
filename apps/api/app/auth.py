@@ -25,9 +25,10 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-def create_access_token(*, user_id: int, clinic_id: int, role: str) -> str:
+def create_access_token(*, user_id: int, clinic_id: int, role: str, remember: bool = False) -> str:
     settings = get_settings()
-    expire = datetime.now(timezone.utc) + timedelta(hours=settings.jwt_expire_hours)
+    hours = settings.jwt_remember_expire_hours if remember else settings.jwt_expire_hours
+    expire = datetime.now(timezone.utc) + timedelta(hours=hours)
     payload = {
         "sub": str(user_id),
         "clinic_id": clinic_id,

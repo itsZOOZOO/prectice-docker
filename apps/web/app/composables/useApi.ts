@@ -23,6 +23,8 @@ export function useApi() {
     method?: string
     body?: unknown
     query?: Record<string, string | number | boolean | undefined | null>
+    /** When false, 401 does not clear session / bounce to login (e.g. SSO exchange). */
+    authRedirect?: boolean
   } = {}): Promise<T> {
     const headers = authHeaders()
 
@@ -42,7 +44,7 @@ export function useApi() {
       return res.data as T
     } catch (err: unknown) {
       const e = err as { data?: { detail?: string | { msg: string }[] }, statusCode?: number, message?: string }
-      if (e.statusCode === 401) {
+      if (e.statusCode === 401 && opts.authRedirect !== false) {
         auth.clearSession()
         if (import.meta.client) {
           await navigateTo('/login')

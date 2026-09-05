@@ -12,7 +12,11 @@ export default defineNuxtConfig({
 
   runtimeConfig: {
     public: {
-      apiBase: process.env.NUXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api'
+      apiBase: process.env.NUXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api',
+      ssoAuthBaseUrl: process.env.NUXT_PUBLIC_SSO_AUTH_BASE_URL || 'https://auth.pratikp.com',
+      ssoAppSlug: process.env.NUXT_PUBLIC_SSO_APP_SLUG || 'navapp-dental',
+      // Empty = derive from window.location.origin + /sso/callback
+      ssoCallbackUrl: process.env.NUXT_PUBLIC_SSO_CALLBACK_URL || ''
     }
   },
 

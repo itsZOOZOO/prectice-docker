@@ -12,6 +12,12 @@ class OkResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+    remember: bool = False
+
+
+class SsoExchangeRequest(BaseModel):
+    code: str = Field(min_length=1)
+    remember: bool = False
 
 
 class TokenUser(BaseModel):
