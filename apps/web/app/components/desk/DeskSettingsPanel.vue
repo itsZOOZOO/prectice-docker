@@ -78,6 +78,12 @@ const BASE_SETTINGS_ITEMS: Omit<DeskMasterItem, 'locked'>[] = [
     label: 'Setup PIN',
     description: 'Lock sensitive settings',
     icon: '🔐'
+  },
+  {
+    id: 'install-app',
+    label: 'Install app',
+    description: 'Add Nav Dental to home screen',
+    icon: '📲'
   }
 ]
 
@@ -271,6 +277,7 @@ function isSection(id: string): id is SettingsSection {
         <DeskTreatmentTemplatesPanel v-else-if="itemId === 'treatment-templates'" />
         <DeskWarrantyTemplatesPanel v-else-if="itemId === 'warranty-templates'" />
         <DeskSetupPinSettingsPanel v-else-if="itemId === 'setup-pin'" />
+        <DeskPwaInstallSettingsPanel v-else-if="itemId === 'install-app'" />
         <div
           v-else-if="itemId === 'lead-intelligence'"
           class="flex h-full flex-col items-center justify-center gap-2 p-8 text-center"

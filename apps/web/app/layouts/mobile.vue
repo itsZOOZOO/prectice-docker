@@ -104,9 +104,19 @@ provide('mobileRefreshBadges', refreshBadges)
       v-if="showShellHeader"
       class="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-3"
     >
-      <div class="min-w-0">
-        <p class="truncate text-sm font-semibold text-[#1C2B35]">{{ clinicName || 'Nav Dental' }}</p>
-        <p class="text-[11px] text-slate-400">Mobile</p>
+      <div class="flex min-w-0 items-center gap-2">
+        <img
+          src="/icons/icon-192.png"
+          alt=""
+          width="28"
+          height="28"
+          class="size-7 shrink-0 rounded-md"
+          aria-hidden="true"
+        >
+        <div class="min-w-0">
+          <p class="truncate text-sm font-semibold text-[#1C2B35]">{{ clinicName || 'Nav Dental' }}</p>
+          <p class="text-[11px] text-slate-400">Mobile</p>
+        </div>
       </div>
       <div class="flex items-center gap-1.5">
         <NuxtLink

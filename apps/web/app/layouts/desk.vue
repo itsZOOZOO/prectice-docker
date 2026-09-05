@@ -271,9 +271,19 @@ useSeoMeta({ title: title })
       <aside class="desk-shell__aside">
         <div class="border-b border-slate-100" :class="collapsed ? 'px-2 py-3' : 'px-4 py-4'">
           <div class="flex items-start gap-2" :class="collapsed ? 'flex-col items-center' : 'justify-between'">
-            <div v-if="!collapsed" class="min-w-0 flex-1">
-              <p class="truncate text-[11px] uppercase tracking-wider text-slate-400">{{ clinicName }}</p>
-              <p class="text-base font-semibold text-[#1C2B35]">Desk</p>
+            <div v-if="!collapsed" class="flex min-w-0 flex-1 items-center gap-2">
+              <img
+                src="/icons/icon-192.png"
+                alt=""
+                width="28"
+                height="28"
+                class="size-7 shrink-0 rounded-md"
+                aria-hidden="true"
+              >
+              <div class="min-w-0">
+                <p class="truncate text-[11px] uppercase tracking-wider text-slate-400">{{ clinicName }}</p>
+                <p class="text-base font-semibold text-[#1C2B35]">Desk</p>
+              </div>
             </div>
             <p v-else class="truncate text-center text-[11px] font-semibold uppercase tracking-wide text-slate-400">
               {{ clinicInitial }}

@@ -170,13 +170,23 @@ function startSso() {
     </div>
 
     <div class="relative z-10 mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-10">
-      <div class="mb-8">
-        <p class="text-4xl font-semibold text-[#0097A7]">
-          Nav Dental
-        </p>
-        <p class="mt-2 text-slate-600">
-          Clinic desk & mobile
-        </p>
+      <div class="mb-8 flex items-center gap-3">
+        <img
+          src="/icons/icon-192.png"
+          alt=""
+          width="48"
+          height="48"
+          class="size-12 rounded-xl shadow-sm"
+          aria-hidden="true"
+        >
+        <div>
+          <p class="text-4xl font-semibold text-[#0097A7]">
+            Nav Dental
+          </p>
+          <p class="mt-2 text-slate-600">
+            Clinic desk & mobile
+          </p>
+        </div>
       </div>
 
       <div class="space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">

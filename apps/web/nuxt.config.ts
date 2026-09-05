@@ -17,7 +17,9 @@ export default defineNuxtConfig({
       ssoAppSlug: process.env.NUXT_PUBLIC_SSO_APP_SLUG || 'navapp-dental',
       // Empty = derive from window.location.origin + /sso/callback
       // Override on Vercel to the exact URL registered on auth.pratikp.com
-      ssoCallbackUrl: process.env.NUXT_PUBLIC_SSO_CALLBACK_URL || ''
+      ssoCallbackUrl: process.env.NUXT_PUBLIC_SSO_CALLBACK_URL || '',
+      // Set NUXT_PUBLIC_PWA_DEV=true to register SW on localhost
+      pwaDev: process.env.NUXT_PUBLIC_PWA_DEV || ''
     }
   },
 

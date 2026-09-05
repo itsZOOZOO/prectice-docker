@@ -31,6 +31,7 @@ export type SettingsSection =
   | 'client-tags'
   | 'setup-pin'
   | 'lead-intelligence'
+  | 'install-app'
 
 export type StatisticsSection =
   | 'total-patients'
@@ -74,7 +75,8 @@ const SETTINGS_SECTIONS = new Set<SettingsSection>([
   'patient-lists',
   'client-tags',
   'setup-pin',
-  'lead-intelligence'
+  'lead-intelligence',
+  'install-app'
 ])
 
 const STATISTICS_SECTIONS = new Set<StatisticsSection>([

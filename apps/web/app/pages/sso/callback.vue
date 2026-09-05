@@ -66,9 +66,19 @@ onMounted(async () => {
 
 <template>
   <div class="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-10">
-    <p class="text-4xl font-semibold text-[#0097A7]">
-      Nav Dental
-    </p>
+    <div class="flex items-center gap-3">
+      <img
+        src="/icons/icon-192.png"
+        alt=""
+        width="40"
+        height="40"
+        class="size-10 rounded-xl"
+        aria-hidden="true"
+      >
+      <p class="text-4xl font-semibold text-[#0097A7]">
+        Nav Dental
+      </p>
+    </div>
     <p class="mt-6 text-slate-600">
       {{ error || status }}
     </p>

@@ -56,6 +56,8 @@ docker compose -f docker-compose.prod.yml --env-file .env.production up -d --bui
   - `NUXT_PUBLIC_SSO_APP_SLUG=navapp-dental`
   - `NUXT_PUBLIC_SSO_CALLBACK_URL=https://dental.navapp.in/sso/callback` (must match auth portal exactly)
 
+PWA installs automatically in production (HTTPS). Service worker is network-first (no offline cache). Local SW: `NUXT_PUBLIC_PWA_DEV=true`.
+
 ### Public plans (`mypln.in`)
 - Root: `apps/plan-web`
 - `NUXT_PUBLIC_API_BASE=https://api.dental.navapp.in/api`
