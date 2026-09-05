@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Date,
     DateTime,
@@ -203,6 +204,7 @@ class AppointmentService(Base):
     duration_minutes: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
     description: Mapped[str | None] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    allow_public_booking: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -239,6 +241,51 @@ class DoctorSchedule(Base):
 
     __table_args__ = (
         UniqueConstraint("doctor_id", "weekday", name="uq_doctor_weekday"),
+    )
+
+
+class DoctorBreak(Base):
+    __tablename__ = "appointments_doctor_breaks"
+
+    break_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("appointments_doctors.doctor_id"), nullable=False, index=True)
+    # 0=Mon .. 6=Sun
+    weekday: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+    break_name: Mapped[str | None] = mapped_column(String(100))
+    allow_booking: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DoctorTimeOff(Base):
+    __tablename__ = "appointments_doctor_time_off"
+
+    time_off_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("appointments_doctors.doctor_id"), nullable=False, index=True)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    start_time: Mapped[time | None] = mapped_column(Time)
+    end_time: Mapped[time | None] = mapped_column(Time)
+    reason: Mapped[str | None] = mapped_column(String(255))
+    is_approved: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    google_sourced: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DoctorServiceLink(Base):
+    __tablename__ = "appointments_doctor_services"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("appointments_doctors.doctor_id"), nullable=False, index=True)
+    service_id: Mapped[int] = mapped_column(ForeignKey("appointments_services.service_id"), nullable=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("doctor_id", "service_id", name="uq_doctor_service"),
     )
 
 
@@ -644,3 +691,62 @@ class CardIssued(Base):
     # Null on imported legacy rows — timeline falls back to date_of_purchase noon.
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+
+class ActivityEvent(Base):
+    """Append-only clinic activity feed (staff actors only)."""
+
+    __tablename__ = "activity_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    actor_user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.client_id"), index=True)
+    payload: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class ClinicClientFilter(Base):
+    """Saved patient list / client filter definitions (Desk Wave 3)."""
+
+    __tablename__ = "clinic_client_filters"
+
+    filter_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    show_on_dashboard: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    criteria_json: Mapped[dict | list | None] = mapped_column(JSON)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    members: Mapped[list[ClinicClientFilterMember]] = relationship(
+        back_populates="filter", cascade="all, delete-orphan"
+    )
+
+
+class ClinicClientFilterMember(Base):
+    """Manual client membership for a saved filter (OR'd with criteria)."""
+
+    __tablename__ = "clinic_client_filter_members"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    filter_id: Mapped[int] = mapped_column(
+        ForeignKey("clinic_client_filters.filter_id"), nullable=False, index=True
+    )
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.client_id"), nullable=False, index=True)
+    added_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    filter: Mapped[ClinicClientFilter] = relationship(back_populates="members")
+
+    __table_args__ = (
+        UniqueConstraint("filter_id", "client_id", name="uq_client_filter_member"),
+    )

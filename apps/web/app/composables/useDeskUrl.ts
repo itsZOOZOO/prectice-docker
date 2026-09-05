@@ -1,4 +1,4 @@
-export type DeskView = 'dashboard' | 'patients' | 'calendar' | 'tasks' | 'lab' | 'settings'
+export type DeskView = 'dashboard' | 'patients' | 'calendar' | 'tasks' | 'lab' | 'statistics' | 'settings'
 export type CalMode = 'day' | 'month'
 export type LabFilter =
   | 'action_needed'
@@ -10,12 +10,34 @@ export type LabFilter =
   | 'closed'
   | 'cancelled'
 
+export type SettingsSection =
+  | 'clinic-settings'
+  | 'doctors-schedules'
+  | 'dental-labs'
+  | 'whatsapp'
+  | 'medicine-templates'
+  | 'treatment-templates'
+  | 'warranty-templates'
+  | 'patient-lists'
+  | 'setup-pin'
+  | 'lead-intelligence'
+
+export type StatisticsSection =
+  | 'total-patients'
+  | 'appointments-overview'
+  | 'total-income'
+  | 'checkins-overview'
+  | 'inquiry-conversion'
+  | 'call-statistics'
+  | 'lead-intelligence'
+
 const VIEW_TITLES: Record<DeskView, string> = {
   dashboard: 'Dashboard',
   patients: 'Patients',
   calendar: 'Calendar',
   tasks: 'Tasks',
   lab: 'Lab',
+  statistics: 'Reports',
   settings: 'Settings'
 }
 
@@ -28,6 +50,29 @@ const LAB_FILTERS = new Set<LabFilter>([
   'open',
   'closed',
   'cancelled'
+])
+
+const SETTINGS_SECTIONS = new Set<SettingsSection>([
+  'clinic-settings',
+  'doctors-schedules',
+  'dental-labs',
+  'whatsapp',
+  'medicine-templates',
+  'treatment-templates',
+  'warranty-templates',
+  'patient-lists',
+  'setup-pin',
+  'lead-intelligence'
+])
+
+const STATISTICS_SECTIONS = new Set<StatisticsSection>([
+  'total-patients',
+  'appointments-overview',
+  'total-income',
+  'checkins-overview',
+  'inquiry-conversion',
+  'call-statistics',
+  'lead-intelligence'
 ])
 
 function todayISO() {
@@ -50,6 +95,7 @@ export function useDeskUrl() {
       || v === 'lab'
       || v === 'dashboard'
       || v === 'settings'
+      || v === 'statistics'
     ) {
       return v
     }
@@ -80,6 +126,23 @@ export function useDeskUrl() {
     return 'action_needed'
   })
 
+  const settingsSection = computed<SettingsSection | null>(() => {
+    const raw = route.query.section
+    if (typeof raw === 'string' && SETTINGS_SECTIONS.has(raw as SettingsSection)) {
+      return raw as SettingsSection
+    }
+    return null
+  })
+
+  const statisticsSection = computed<StatisticsSection | null>(() => {
+    if (view.value !== 'statistics') return null
+    const raw = route.query.section
+    if (typeof raw === 'string' && STATISTICS_SECTIONS.has(raw as StatisticsSection)) {
+      return raw as StatisticsSection
+    }
+    return null
+  })
+
   const title = computed(() => VIEW_TITLES[view.value])
 
   function buildHref(opts: {
@@ -88,6 +151,7 @@ export function useDeskUrl() {
     cal?: CalMode | null
     date?: string | null
     labFilter?: LabFilter | null
+    section?: SettingsSection | StatisticsSection | string | null
   }) {
     const query: Record<string, string> = { view: opts.view }
     if (opts.view === 'patients' && opts.patientId) {
@@ -99,6 +163,18 @@ export function useDeskUrl() {
     }
     if (opts.view === 'lab') {
       query.labFilter = opts.labFilter || 'action_needed'
+    }
+    if (opts.view === 'settings') {
+      const section = opts.section === undefined ? settingsSection.value : opts.section
+      if (typeof section === 'string' && SETTINGS_SECTIONS.has(section as SettingsSection)) {
+        query.section = section
+      }
+    }
+    if (opts.view === 'statistics') {
+      const section = opts.section === undefined ? statisticsSection.value : opts.section
+      if (typeof section === 'string' && STATISTICS_SECTIONS.has(section as StatisticsSection)) {
+        query.section = section
+      }
     }
     return { path: '/desk', query }
   }
@@ -116,6 +192,20 @@ export function useDeskUrl() {
       await router.push(buildHref({
         view: 'lab',
         labFilter: labFilter.value
+      }))
+      return
+    }
+    if (nextView === 'settings') {
+      await router.push(buildHref({
+        view: 'settings',
+        section: settingsSection.value || 'clinic-settings'
+      }))
+      return
+    }
+    if (nextView === 'statistics') {
+      await router.push(buildHref({
+        view: 'statistics',
+        section: statisticsSection.value || 'total-patients'
       }))
       return
     }
@@ -137,6 +227,20 @@ export function useDeskUrl() {
     await router.push(buildHref({ view: 'lab', labFilter: next }))
   }
 
+  async function setSettingsSection(id: string | null) {
+    await router.push(buildHref({
+      view: 'settings',
+      section: id
+    }))
+  }
+
+  async function setStatisticsSection(id: string | null) {
+    await router.push(buildHref({
+      view: 'statistics',
+      section: id
+    }))
+  }
+
   async function openPatient(id: number) {
     await router.push(buildHref({ view: 'patients', patientId: id }))
   }
@@ -151,11 +255,15 @@ export function useDeskUrl() {
     calMode,
     calDate,
     labFilter,
+    settingsSection,
+    statisticsSection,
     title,
     buildHref,
     setView,
     setCalendar,
     setLabFilter,
+    setSettingsSection,
+    setStatisticsSection,
     openPatient,
     clearPatient,
     todayISO

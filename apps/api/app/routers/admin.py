@@ -568,3 +568,117 @@ async def preview_letterhead(
             "Cache-Control": "private, no-store",
         },
     )
+
+
+# --- Integrations (Call Intelligence) ---------------------------------------
+
+
+class CallIntelligenceUpdateBody(BaseModel):
+    enabled: bool | None = None
+    api_token: str | None = None
+    clear_token: bool = False
+    api_base_url: str | None = None
+    run_smoke_test: bool = True
+
+
+@router.get("/clinics/{clinic_id}/integrations/call-intelligence", response_model=OkResponse)
+def get_call_intelligence(
+    clinic_id: int,
+    _: Annotated[User, Depends(require_superadmin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import call_intelligence_svc as ci
+
+    _require_clinic(db, clinic_id)
+    return OkResponse(data=ci.admin_status(db, clinic_id))
+
+
+@router.patch("/clinics/{clinic_id}/integrations/call-intelligence", response_model=OkResponse)
+def update_call_intelligence(
+    clinic_id: int,
+    body: CallIntelligenceUpdateBody,
+    _: Annotated[User, Depends(require_superadmin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import call_intelligence_svc as ci
+
+    _require_clinic(db, clinic_id)
+    data = ci.save_admin_config(
+        db,
+        clinic_id,
+        enabled=body.enabled,
+        api_token=body.api_token,
+        clear_token=body.clear_token,
+        api_base_url=body.api_base_url,
+        run_smoke_test=body.run_smoke_test,
+    )
+    return OkResponse(data=data)
+
+
+@router.post("/clinics/{clinic_id}/integrations/call-intelligence/smoke-test", response_model=OkResponse)
+def smoke_test_call_intelligence(
+    clinic_id: int,
+    _: Annotated[User, Depends(require_superadmin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import call_intelligence_svc as ci
+
+    _require_clinic(db, clinic_id)
+    return OkResponse(data=ci.smoke_test(db, clinic_id))
+
+
+# --- Integrations (Lead Intelligence) ---------------------------------------
+
+
+class LeadIntelligenceUpdateBody(BaseModel):
+    enabled: bool | None = None
+    api_token: str | None = None
+    clear_token: bool = False
+    api_base_url: str | None = None
+    run_smoke_test: bool = True
+
+
+@router.get("/clinics/{clinic_id}/integrations/lead-intelligence", response_model=OkResponse)
+def get_lead_intelligence(
+    clinic_id: int,
+    _: Annotated[User, Depends(require_superadmin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import lead_intelligence_svc as li
+
+    _require_clinic(db, clinic_id)
+    return OkResponse(data=li.admin_status(db, clinic_id))
+
+
+@router.patch("/clinics/{clinic_id}/integrations/lead-intelligence", response_model=OkResponse)
+def update_lead_intelligence(
+    clinic_id: int,
+    body: LeadIntelligenceUpdateBody,
+    _: Annotated[User, Depends(require_superadmin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import lead_intelligence_svc as li
+
+    _require_clinic(db, clinic_id)
+    data = li.save_admin_config(
+        db,
+        clinic_id,
+        enabled=body.enabled,
+        api_token=body.api_token,
+        clear_token=body.clear_token,
+        api_base_url=body.api_base_url,
+        run_smoke_test=body.run_smoke_test,
+    )
+    return OkResponse(data=data)
+
+
+@router.post("/clinics/{clinic_id}/integrations/lead-intelligence/smoke-test", response_model=OkResponse)
+def smoke_test_lead_intelligence(
+    clinic_id: int,
+    _: Annotated[User, Depends(require_superadmin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import lead_intelligence_svc as li
+
+    _require_clinic(db, clinic_id)
+    return OkResponse(data=li.smoke_test(db, clinic_id))

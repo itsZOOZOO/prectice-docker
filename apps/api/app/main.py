@@ -7,16 +7,27 @@ from app.config import get_settings
 from app.db import Base, engine
 from app import models as _models  # noqa: F401 — register metadata
 from app.routers import (
+    activity,
     admin,
     appointments,
     auth,
     billing,
+    call_intelligence,
     clients,
     desk,
     labs,
+    lead_intelligence,
     media,
     prescriptions,
     settings,
+    settings_clinic,
+    settings_client_filters,
+    settings_doctors,
+    settings_medicine,
+    settings_setup,
+    settings_treatments,
+    settings_warranty,
+    statistics,
     tasks,
     treatment_plans,
     warranty_cards,
@@ -36,6 +47,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
+app.include_router(activity.router, prefix="/api")
 app.include_router(clients.router, prefix="/api")
 app.include_router(appointments.router, prefix="/api")
 app.include_router(billing.router, prefix="/api")
@@ -43,6 +55,19 @@ app.include_router(prescriptions.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(desk.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
+app.include_router(settings_clinic.router, prefix="/api")
+app.include_router(settings_doctors.router, prefix="/api")
+app.include_router(settings_medicine.router, prefix="/api")
+app.include_router(settings_treatments.router, prefix="/api")
+app.include_router(settings_warranty.router, prefix="/api")
+app.include_router(settings_client_filters.router, prefix="/api")
+app.include_router(settings_client_filters.dashboard_router, prefix="/api")
+app.include_router(settings_setup.router, prefix="/api")
+app.include_router(statistics.router, prefix="/api")
+app.include_router(call_intelligence.router, prefix="/api")
+app.include_router(call_intelligence.status_router, prefix="/api")
+app.include_router(lead_intelligence.router, prefix="/api")
+app.include_router(lead_intelligence.status_router, prefix="/api")
 app.include_router(labs.router, prefix="/api")
 app.include_router(treatment_plans.router, prefix="/api")
 app.include_router(warranty_cards.router, prefix="/api")
@@ -78,6 +103,20 @@ def _ensure_media_schema() -> None:
                 "ALTER TABLE card_issued ALTER COLUMN created_at SET DEFAULT now()"
             )
         )
+        # Desk settings Wave 1 — additive column (create_all won't alter existing tables).
+        conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                  IF to_regclass('appointments_services') IS NOT NULL THEN
+                    ALTER TABLE appointments_services
+                      ADD COLUMN IF NOT EXISTS allow_public_booking BOOLEAN NOT NULL DEFAULT false;
+                  END IF;
+                END $$;
+                """
+            )
+        )
     Base.metadata.create_all(bind=engine)
     # Keep serials ahead of imported explicit PKs (warranty cards, etc.)
     with engine.begin() as conn:
@@ -90,6 +129,11 @@ def _ensure_media_schema() -> None:
             ("task_notes", "note_id"),
             ("treatment_photos", "photo_id"),
             ("price_option_photos", "photo_id"),
+            ("appointments_doctor_breaks", "break_id"),
+            ("appointments_doctor_time_off", "time_off_id"),
+            ("appointments_doctor_services", "id"),
+            ("clinic_client_filters", "filter_id"),
+            ("clinic_client_filter_members", "id"),
         ):
             conn.execute(
                 text(

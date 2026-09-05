@@ -11,6 +11,7 @@ const { view } = useDeskUrl()
     <DeskCalendarPanel v-else-if="view === 'calendar'" />
     <DeskTasksPanel v-else-if="view === 'tasks'" />
     <DeskLabPanel v-else-if="view === 'lab'" />
+    <DeskStatisticsPanel v-else-if="view === 'statistics'" />
     <DeskSettingsPanel v-else-if="view === 'settings'" />
   </div>
 </template>

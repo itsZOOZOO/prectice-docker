@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import {
+  fetchUnreadActivityCount,
+  type ActivityFeedPayload
+} from '~/utils/activity'
+
 const route = useRoute()
 const { clinicName, hydrate } = useAuth()
 hydrate()
@@ -16,6 +21,8 @@ const desktopSwitchTitle = computed(() =>
 const badges = ref({ open_tasks: 0, lab_action_needed: 0, appointments_today: 0 })
 const moreOpen = ref(false)
 const moreMenuRef = ref<HTMLElement | null>(null)
+const activityOpen = ref(false)
+const activityCount = ref<number | null>(null)
 
 const tabs = [
   { to: '/dashboard', label: 'Patients', icon: 'i-lucide-users', match: ['/dashboard', '/clients'] },
@@ -40,6 +47,16 @@ async function refreshBadges() {
   } catch { /* ignore */ }
 }
 
+async function refreshActivityCount() {
+  try {
+    activityCount.value = await fetchUnreadActivityCount(params =>
+      api<ActivityFeedPayload>('/activity', { query: params })
+    )
+  } catch {
+    activityCount.value = null
+  }
+}
+
 function badgeFor(to: string) {
   if (to === '/appointments') return badges.value.appointments_today
   if (to === '/tasks') return badges.value.open_tasks
@@ -53,8 +70,13 @@ function onDocPointer(e: MouseEvent | TouchEvent) {
   if (e.target instanceof Node && !el.contains(e.target)) moreOpen.value = false
 }
 
+async function openActivityPatient(clientId: number) {
+  await navigateTo(`/clients/${clientId}`)
+}
+
 onMounted(() => {
   refreshBadges()
+  void refreshActivityCount()
   document.addEventListener('mousedown', onDocPointer)
   document.addEventListener('touchstart', onDocPointer)
 })
@@ -62,10 +84,16 @@ onUnmounted(() => {
   document.removeEventListener('mousedown', onDocPointer)
   document.removeEventListener('touchstart', onDocPointer)
 })
-watch(() => route.path, () => { moreOpen.value = false })
+watch(() => route.path, () => {
+  moreOpen.value = false
+  void refreshActivityCount()
+})
+watch(activityOpen, () => {
+  void refreshActivityCount()
+})
 
 const showBottomNav = computed(() => !route.path.startsWith('/clients/'))
-/** Clinic branding + Use desktop + ⋮ — Patients home only. */
+/** Clinic branding + Use desktop + bell + ⋮ — Patients home only. */
 const showShellHeader = computed(() => route.path === '/dashboard')
 provide('mobileRefreshBadges', refreshBadges)
 </script>
@@ -89,8 +117,25 @@ provide('mobileRefreshBadges', refreshBadges)
           :class="desktopSwitchClass"
         >
           <span aria-hidden>🖥</span>
-          <span>Use desktop</span>
+          <span class="hidden min-[380px]:inline">Use desktop</span>
         </NuxtLink>
+        <div class="relative shrink-0">
+          <span
+            v-if="activityCount != null && activityCount > 0"
+            class="absolute -right-1 -top-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#0097A7] px-1 text-[10px] font-semibold text-white"
+          >
+            {{ activityCount > 99 ? '99+' : activityCount }}
+          </span>
+          <button
+            type="button"
+            class="flex h-9 w-9 items-center justify-center rounded-full bg-[#e0f7fa] text-[#0097A7] transition hover:bg-[#b2ebf2]"
+            title="Activity log"
+            aria-label="Activity log"
+            @click="activityOpen = true"
+          >
+            <UIcon name="i-lucide-bell" class="h-5 w-5" />
+          </button>
+        </div>
         <div ref="moreMenuRef" class="relative">
           <button
             type="button"
@@ -153,5 +198,11 @@ provide('mobileRefreshBadges', refreshBadges)
         </li>
       </ul>
     </nav>
+
+    <DeskActivityLogSheet
+      v-model:open="activityOpen"
+      @read-state-change="refreshActivityCount"
+      @open-patient="openActivityPatient"
+    />
   </div>
 </template>

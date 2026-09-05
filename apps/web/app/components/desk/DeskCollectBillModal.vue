@@ -46,7 +46,12 @@ function reset() {
 }
 
 watch(isOpen, (open) => {
-  if (open) reset()
+  if (open) {
+    reset()
+    if (props.amountDue > 0) {
+      amount.value = String(props.amountDue)
+    }
+  }
 })
 
 async function save() {

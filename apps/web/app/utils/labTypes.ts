@@ -81,6 +81,7 @@ export const LAB_FILTER_OPTIONS: {
 
 export function labCaseStatusLabel(item: LabCaseListItem): string {
   if (item.action_category === 'blocked_on_clinic') return 'Send pending'
+  if (item.action_category === 'at_lab_missing_due') return 'Set due date'
   if (item.action_category === 'at_lab_overdue') {
     const days = item.days_overdue ?? 0
     return days > 0 ? `Overdue ${days}d` : 'Overdue at lab'
@@ -96,6 +97,7 @@ export function labCaseStatusLabel(item: LabCaseListItem): string {
 
 export function labCaseStatusColor(item: LabCaseListItem): string {
   if (item.action_category === 'at_lab_overdue') return '#ef4444'
+  if (item.action_category === 'at_lab_missing_due') return '#ef4444'
   if (item.action_category === 'blocked_on_clinic') return '#f59e0b'
   if (item.action_category === 'received_no_future_appointment') return '#7c3aed'
   if (item.action_category === 'at_lab') return '#0284c7'

@@ -8,7 +8,9 @@ const { api } = useApi()
 const treatments = ref<CatalogBrowseItem[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
-const lightbox = ref<string | null>(null)
+const lightboxOpen = ref(false)
+const lightboxPhotos = ref<string[]>([])
+const lightboxIndex = ref(0)
 
 const stats = computed(() => {
   const priceOptions = treatments.value.reduce((sum, t) => sum + t.price_options.length, 0)
@@ -16,6 +18,12 @@ const stats = computed(() => {
   const appointments = treatments.value.reduce((sum, t) => sum + t.default_appts, 0)
   return { priceOptions, photos, appointments }
 })
+
+function openLightbox(payload: { photos: string[], index: number }) {
+  lightboxPhotos.value = payload.photos
+  lightboxIndex.value = payload.index
+  lightboxOpen.value = true
+}
 
 async function load() {
   loading.value = true
@@ -104,7 +112,7 @@ onMounted(load)
           v-for="t in treatments"
           :key="t.id"
           :treatment="t"
-          @open-photo="lightbox = $event"
+          @open-photo="openLightbox"
         />
 
         <section class="grid grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -144,17 +152,10 @@ onMounted(load)
       </template>
     </main>
 
-    <div
-      v-if="lightbox"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
-      @click="lightbox = null"
-    >
-      <img
-        :src="lightbox"
-        alt=""
-        class="max-h-full max-w-full rounded-lg object-contain"
-        @click.stop
-      >
-    </div>
+    <DeskPhotoLightbox
+      v-model:open="lightboxOpen"
+      :photos="lightboxPhotos"
+      :start-index="lightboxIndex"
+    />
   </div>
 </template>

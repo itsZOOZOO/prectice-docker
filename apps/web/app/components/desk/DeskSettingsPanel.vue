@@ -1,306 +1,303 @@
 <script setup lang="ts">
-import type { DentalLab } from '~/utils/labTypes'
+import type { ClinicSettingsTab } from '~/utils/clinicSettings'
+import type { DoctorDetailTab } from '~/utils/doctorSettings'
+import type { SettingsSection } from '~/composables/useDeskUrl'
+import { isSetupSectionLocked } from '~/utils/setupAccess'
 
-type WaSettings = {
-  enabled: boolean
-  wa_enabled: boolean
-  has_api_key: boolean
-  api_key_preview: string | null
-  wa_api_url: string
+type DeskMasterItem = {
+  id: string
+  label: string
+  description?: string
+  icon?: string
+  locked?: boolean
 }
 
+const BASE_SETTINGS_ITEMS: Omit<DeskMasterItem, 'locked'>[] = [
+  {
+    id: 'clinic-settings',
+    label: 'Clinic settings',
+    description: 'Hours, booking rules & services',
+    icon: '🏢'
+  },
+  {
+    id: 'doctors-schedules',
+    label: 'Doctors & schedules',
+    description: 'Per-doctor hours, breaks & leave',
+    icon: '🗓️'
+  },
+  {
+    id: 'patient-lists',
+    label: 'Patient lists',
+    description: 'Saved filters for dashboard & search',
+    icon: '📋'
+  },
+  {
+    id: 'dental-labs',
+    label: 'Dental labs',
+    description: 'Lab partners for case orders',
+    icon: '🔬'
+  },
+  {
+    id: 'whatsapp',
+    label: 'WhatsApp',
+    description: 'Appointment confirm messaging',
+    icon: '💬'
+  },
+  {
+    id: 'medicine-templates',
+    label: 'Medicine templates',
+    description: 'Prescribing catalog defaults',
+    icon: '💊'
+  },
+  {
+    id: 'treatment-templates',
+    label: 'Treatment templates',
+    description: 'Catalog, pricing & photos',
+    icon: '🦷'
+  },
+  {
+    id: 'warranty-templates',
+    label: 'Warranty templates',
+    description: 'Card types, terms & issued cards',
+    icon: '🛡️'
+  },
+  {
+    id: 'lead-intelligence',
+    label: 'Lead Intelligence',
+    description: 'Managed by superadmin',
+    icon: '📈'
+  },
+  {
+    id: 'setup-pin',
+    label: 'Setup PIN',
+    description: 'Lock sensitive settings',
+    icon: '🔐'
+  }
+]
+
+const { settingsSection, setSettingsSection } = useDeskUrl()
 const { api } = useApi()
-const toast = useToast()
+const {
+  pinConfigured,
+  isUnlocked,
+  fetchStatus,
+  needsUnlock
+} = useSetupAccess()
 
-const loading = ref(true)
-const saving = ref(false)
-const error = ref('')
-const form = reactive({
-  wa_enabled: false,
-  wa_api_url: 'https://wa.aarogyams.com/api.php',
-  wa_api_key: '',
-  has_api_key: false,
-  api_key_preview: null as string | null,
-  replace_key: false
+const clinicTab = ref<ClinicSettingsTab>('hours')
+const doctorDetailTab = ref<DoctorDetailTab>('schedule')
+const doctorsInDetail = ref(false)
+const unlockOpen = ref(false)
+const pendingSection = ref<string | null>(null)
+
+type LeadStatus = {
+  enabled: boolean
+  has_api_key: boolean
+  can_use: boolean
+  linked_user: { id: number, name: string | null, email: string | null } | null
+}
+const leadStatus = ref<LeadStatus | null>(null)
+
+async function loadLeadStatus() {
+  try {
+    leadStatus.value = await api<LeadStatus>('/settings/lead-intelligence')
+  } catch {
+    leadStatus.value = null
+  }
+}
+
+const settingsItems = computed<DeskMasterItem[]>(() =>
+  BASE_SETTINGS_ITEMS.map(item => ({
+    ...item,
+    locked: Boolean(
+      pinConfigured.value
+      && !isUnlocked.value
+      && isSetupSectionLocked(item.id)
+    )
+  }))
+)
+
+const selectedId = computed({
+  get: () => settingsSection.value,
+  set: (id: string | null) => {
+    void setSettingsSection(id)
+  }
 })
 
-const labs = ref<DentalLab[]>([])
-const labsLoading = ref(false)
-const labSaving = ref(false)
-const labFormOpen = ref(false)
-const editingLabId = ref<number | null>(null)
-const labForm = reactive({
-  name: '',
-  contact_person: '',
-  phone: '',
-  notes: ''
+const detailGated = computed(() => {
+  const id = selectedId.value
+  if (!id) return false
+  return needsUnlock(id)
 })
 
-async function load() {
-  loading.value = true
-  error.value = ''
+onMounted(async () => {
+  void loadLeadStatus()
   try {
-    const data = await api<WaSettings>('/settings/whatsapp')
-    form.wa_enabled = data.wa_enabled
-    form.wa_api_url = data.wa_api_url || 'https://wa.aarogyams.com/api.php'
-    form.has_api_key = data.has_api_key
-    form.api_key_preview = data.api_key_preview
-    form.wa_api_key = ''
-    form.replace_key = !data.has_api_key
-  } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Failed to load settings'
-  } finally {
-    loading.value = false
+    await fetchStatus()
+  } catch {
+    // Status fetch failure shouldn't block settings shell.
   }
-}
-
-async function loadLabs() {
-  labsLoading.value = true
-  try {
-    labs.value = (await api<{ items: DentalLab[] }>('/labs')).items
-  } catch (e: unknown) {
-    toast.add({ title: e instanceof Error ? e.message : 'Failed to load labs', color: 'error' })
-  } finally {
-    labsLoading.value = false
+  if (!settingsSection.value && import.meta.client) {
+    const wide = window.matchMedia('(min-width: 1024px)').matches
+    if (wide) void setSettingsSection('clinic-settings')
   }
-}
+})
 
-async function save() {
-  saving.value = true
-  try {
-    const body: Record<string, unknown> = {
-      wa_enabled: form.wa_enabled,
-      wa_api_url: form.wa_api_url.trim() || null
-    }
-    if (form.replace_key) {
-      if (form.wa_api_key.trim()) {
-        body.wa_api_key = form.wa_api_key.trim()
-      } else if (form.has_api_key) {
-        body.clear_api_key = true
-      }
-    }
-    const data = await api<WaSettings>('/settings/whatsapp', { method: 'PATCH', body })
-    form.wa_enabled = data.wa_enabled
-    form.wa_api_url = data.wa_api_url || form.wa_api_url
-    form.has_api_key = data.has_api_key
-    form.api_key_preview = data.api_key_preview
-    form.wa_api_key = ''
-    form.replace_key = !data.has_api_key
-    toast.add({
-      title: data.enabled ? 'WhatsApp ready' : 'WhatsApp settings saved',
-      description: data.enabled ? 'Confirmations can be sent from Book' : 'Enable + API key required to send',
-      color: data.enabled ? 'success' : 'warning'
-    })
-  } catch (e: unknown) {
-    toast.add({ title: e instanceof Error ? e.message : 'Save failed', color: 'error' })
-  } finally {
-    saving.value = false
-  }
-}
-
-function openNewLab() {
-  editingLabId.value = null
-  labForm.name = ''
-  labForm.contact_person = ''
-  labForm.phone = ''
-  labForm.notes = ''
-  labFormOpen.value = true
-}
-
-function openEditLab(lab: DentalLab) {
-  editingLabId.value = lab.lab_id
-  labForm.name = lab.name
-  labForm.contact_person = lab.contact_person || ''
-  labForm.phone = lab.phone || ''
-  labForm.notes = lab.notes || ''
-  labFormOpen.value = true
-}
-
-async function saveLab() {
-  if (!labForm.name.trim()) {
-    toast.add({ title: 'Lab name required', color: 'warning' })
+function onSelect(id: string | null) {
+  if (id && needsUnlock(id)) {
+    pendingSection.value = id
+    selectedId.value = id
+    unlockOpen.value = true
+    if (id !== 'doctors-schedules') doctorsInDetail.value = false
     return
   }
-  labSaving.value = true
-  try {
-    const body = {
-      name: labForm.name.trim(),
-      contact_person: labForm.contact_person || null,
-      phone: labForm.phone || null,
-      notes: labForm.notes || null
-    }
-    if (editingLabId.value) {
-      await api(`/labs/${editingLabId.value}`, { method: 'PATCH', body })
-      toast.add({ title: 'Lab updated', color: 'success' })
-    } else {
-      await api('/labs', { method: 'POST', body })
-      toast.add({ title: 'Lab added', color: 'success' })
-    }
-    labFormOpen.value = false
-    await loadLabs()
-  } catch (e: unknown) {
-    toast.add({ title: e instanceof Error ? e.message : 'Failed', color: 'error' })
-  } finally {
-    labSaving.value = false
-  }
+  pendingSection.value = null
+  selectedId.value = id
+  if (id !== 'doctors-schedules') doctorsInDetail.value = false
 }
 
-async function archiveLab(lab: DentalLab) {
-  if (!window.confirm(`Archive lab “${lab.name}”? This cannot be undone.`)) return
-  try {
-    await api(`/labs/${lab.lab_id}`, { method: 'DELETE' })
-    toast.add({ title: 'Lab archived', color: 'success' })
-    await loadLabs()
-  } catch (e: unknown) {
-    toast.add({ title: e instanceof Error ? e.message : 'Failed', color: 'error' })
-  }
+function onUnlocked() {
+  const target = pendingSection.value || selectedId.value
+  unlockOpen.value = false
+  pendingSection.value = null
+  if (target) selectedId.value = target
 }
 
-onMounted(() => {
-  void load()
-  void loadLabs()
-})
+function isSection(id: string): id is SettingsSection {
+  return BASE_SETTINGS_ITEMS.some(item => item.id === id)
+}
 </script>
 
 <template>
-  <div class="h-full min-h-0 overflow-y-auto px-5 py-5">
-    <div class="mx-auto max-w-xl space-y-8">
-      <div>
-        <h2 class="text-lg font-semibold text-[#1C2B35]">Settings</h2>
-        <p class="mt-1 text-sm text-slate-500">Clinic WhatsApp and dental lab vendors</p>
-      </div>
-
-      <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
-      <p v-else-if="loading" class="text-sm text-slate-400">Loading…</p>
-
-      <form
-        v-else
-        class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5"
-        @submit.prevent="save"
-      >
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <p class="text-sm font-medium text-[#1C2B35]">WhatsApp messaging</p>
-            <p class="mt-0.5 text-xs text-slate-500">
-              Uses <span class="font-mono">appointment_confirm</span> via wa.aarogyams.com
-            </p>
-          </div>
-          <label class="inline-flex cursor-pointer items-center gap-2 text-sm">
-            <input v-model="form.wa_enabled" type="checkbox" class="h-4 w-4 accent-[#0097A7]">
-            <span>{{ form.wa_enabled ? 'Enabled' : 'Disabled' }}</span>
-          </label>
-        </div>
-
-        <UFormField label="API URL">
-          <UInput v-model="form.wa_api_url" class="w-full" placeholder="https://wa.aarogyams.com/api.php" />
-        </UFormField>
-
-        <div class="space-y-2">
-          <div class="flex items-center justify-between gap-2">
-            <p class="text-sm font-medium text-[#1C2B35]">API key</p>
-            <button
-              v-if="form.has_api_key && !form.replace_key"
-              type="button"
-              class="text-xs font-medium text-[#0097A7] hover:underline"
-              @click="form.replace_key = true"
-            >
-              Replace key
-            </button>
-          </div>
-          <p v-if="form.has_api_key && !form.replace_key" class="rounded-lg bg-slate-50 px-3 py-2 font-mono text-sm text-slate-600">
-            Key saved {{ form.api_key_preview }}
-          </p>
-          <template v-else>
-            <UInput
-              v-model="form.wa_api_key"
-              type="password"
-              class="w-full"
-              autocomplete="off"
-              :placeholder="form.has_api_key ? 'Paste new key (leave blank to clear)' : 'Paste clinic API key'"
-            />
-            <button
-              v-if="form.has_api_key"
-              type="button"
-              class="text-xs text-slate-500 hover:text-slate-700"
-              @click="form.replace_key = false; form.wa_api_key = ''"
-            >
-              Cancel replace
-            </button>
-          </template>
-        </div>
-
-        <div
-          class="rounded-lg px-3 py-2 text-xs"
-          :class="form.wa_enabled && (form.has_api_key || form.wa_api_key.trim())
-            ? 'bg-emerald-50 text-emerald-800'
-            : 'bg-amber-50 text-amber-800'"
+  <DeskMasterDetailPanel
+    :items="settingsItems"
+    :selected-id="selectedId"
+    empty-message="Select a settings section"
+    :hide-detail-header="true"
+    @update:selected-id="onSelect"
+  >
+    <template #detail-header="{ item }">
+      <div v-if="item.id === 'clinic-settings' && !detailGated" class="flex max-w-xl gap-1 rounded-lg bg-slate-100 p-1">
+        <button
+          v-for="entry in [
+            { key: 'hours' as const, label: 'Clinic hours' },
+            { key: 'booking' as const, label: 'Booking rules' },
+            { key: 'services' as const, label: 'Services' }
+          ]"
+          :key="entry.key"
+          type="button"
+          class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition"
+          :class="clinicTab === entry.key
+            ? 'bg-white text-[#0097A7] shadow-sm'
+            : 'text-slate-600 hover:text-slate-800'"
+          @click="clinicTab = entry.key"
         >
-          <template v-if="form.wa_enabled && (form.has_api_key || form.wa_api_key.trim())">
-            Ready — Book confirm will show the WhatsApp checkbox.
-          </template>
-          <template v-else>
-            Turn on messaging and save an API key to send confirmations.
-          </template>
-        </div>
+          {{ entry.label }}
+        </button>
+      </div>
+      <div
+        v-else-if="item.id === 'doctors-schedules' && doctorsInDetail && !detailGated"
+        class="flex max-w-2xl gap-1 overflow-x-auto rounded-lg bg-slate-100 p-1"
+      >
+        <button
+          v-for="entry in [
+            { key: 'schedule' as const, label: 'Schedule' },
+            { key: 'breaks' as const, label: 'Breaks' },
+            { key: 'time-off' as const, label: 'Time off' },
+            { key: 'services' as const, label: 'Services' }
+          ]"
+          :key="entry.key"
+          type="button"
+          class="shrink-0 rounded-md px-3 py-2 text-sm font-medium transition"
+          :class="doctorDetailTab === entry.key
+            ? 'bg-white text-[#0097A7] shadow-sm'
+            : 'text-slate-600 hover:text-slate-800'"
+          @click="doctorDetailTab = entry.key"
+        >
+          {{ entry.label }}
+        </button>
+      </div>
+      <div v-else-if="item.id === 'doctors-schedules'" class="min-w-0">
+        <h2 class="truncate text-base font-semibold text-slate-800">{{ item.label }}</h2>
+        <p v-if="item.description" class="truncate text-xs text-slate-500">{{ item.description }}</p>
+      </div>
+      <div v-else class="min-w-0">
+        <h2 class="truncate text-base font-semibold text-slate-800">{{ item.label }}</h2>
+        <p v-if="item.description" class="truncate text-xs text-slate-500">{{ item.description }}</p>
+      </div>
+    </template>
 
-        <div class="flex justify-end gap-2 pt-1">
-          <UButton color="neutral" variant="ghost" type="button" @click="load">Reset</UButton>
-          <UButton type="submit" class="bg-[#0097A7]" :loading="saving">Save</UButton>
-        </div>
-      </form>
-
-      <section class="space-y-3 rounded-2xl border border-slate-200 bg-white p-5">
-        <div class="flex items-center justify-between gap-2">
-          <div>
-            <p class="text-sm font-medium text-[#1C2B35]">Dental lab vendors</p>
-            <p class="mt-0.5 text-xs text-slate-500">Used when creating lab cases</p>
-          </div>
-          <UButton size="sm" class="bg-[#0097A7]" @click="openNewLab">Add lab</UButton>
-        </div>
-        <p v-if="labsLoading" class="text-sm text-slate-400">Loading labs…</p>
-        <ul v-else class="divide-y divide-slate-100">
-          <li v-if="!labs.length" class="py-6 text-center text-sm text-slate-500">No labs yet.</li>
-          <li
-            v-for="lab in labs"
-            :key="lab.lab_id"
-            class="flex flex-wrap items-center justify-between gap-2 py-3"
+    <template #detail="{ itemId }">
+      <div
+        v-if="detailGated"
+        class="flex h-full flex-col items-center justify-center gap-3 p-8 text-center"
+      >
+        <span class="text-4xl opacity-40">🔒</span>
+        <h3 class="text-base font-semibold text-slate-800">Setup locked</h3>
+        <p class="max-w-sm text-sm text-slate-500">
+          Enter the clinic setup PIN to view and edit this section.
+        </p>
+        <button
+          type="button"
+          class="rounded-lg bg-[#0097A7] px-4 py-2 text-sm font-semibold text-white hover:bg-[#00838f]"
+          @click="unlockOpen = true"
+        >
+          Unlock with PIN
+        </button>
+      </div>
+      <template v-else>
+        <DeskClinicSettingsPanel
+          v-if="itemId === 'clinic-settings'"
+          v-model:tab="clinicTab"
+          hide-tab-bar
+        />
+        <DeskDoctorsSchedulesPanel
+          v-else-if="itemId === 'doctors-schedules'"
+          v-model:detail-tab="doctorDetailTab"
+          hide-detail-tab-bar
+          @detail-view-change="doctorsInDetail = $event"
+        />
+        <DeskClientFiltersPanel v-else-if="itemId === 'patient-lists'" />
+        <DeskLabsSettingsPanel v-else-if="itemId === 'dental-labs'" />
+        <DeskWhatsAppSettingsPanel v-else-if="itemId === 'whatsapp'" />
+        <DeskMedicineTemplatesPanel v-else-if="itemId === 'medicine-templates'" />
+        <DeskTreatmentTemplatesPanel v-else-if="itemId === 'treatment-templates'" />
+        <DeskWarrantyTemplatesPanel v-else-if="itemId === 'warranty-templates'" />
+        <DeskSetupPinSettingsPanel v-else-if="itemId === 'setup-pin'" />
+        <div
+          v-else-if="itemId === 'lead-intelligence'"
+          class="flex h-full flex-col items-center justify-center gap-2 p-8 text-center"
+        >
+          <span class="text-4xl opacity-30">📈</span>
+          <h3 class="text-base font-semibold text-slate-800">Lead Intelligence</h3>
+          <p class="max-w-sm text-sm text-slate-500">
+            Linking is managed by superadmin. When enabled for your clinic, the report appears under Reports.
+          </p>
+          <p
+            v-if="leadStatus"
+            class="mt-2 rounded-full px-3 py-1 text-xs font-semibold"
+            :class="leadStatus.can_use
+              ? 'bg-emerald-50 text-emerald-800'
+              : 'bg-slate-100 text-slate-600'"
           >
-            <div class="min-w-0">
-              <p class="text-sm font-medium text-[#1C2B35]">{{ lab.name }}</p>
-              <p class="text-xs text-slate-500">
-                {{ [lab.contact_person, lab.phone].filter(Boolean).join(' · ') || 'No contact' }}
-              </p>
-            </div>
-            <div class="flex gap-2">
-              <UButton size="xs" color="neutral" variant="outline" @click="openEditLab(lab)">Edit</UButton>
-              <UButton size="xs" color="error" variant="ghost" @click="archiveLab(lab)">Archive</UButton>
-            </div>
-          </li>
-        </ul>
-      </section>
-    </div>
-
-    <UModal v-model:open="labFormOpen" :title="editingLabId ? 'Edit lab' : 'Add lab'">
-      <template #body>
-        <form class="space-y-3" @submit.prevent="saveLab">
-          <UFormField label="Name" required>
-            <UInput v-model="labForm.name" class="w-full" />
-          </UFormField>
-          <UFormField label="Contact person">
-            <UInput v-model="labForm.contact_person" class="w-full" />
-          </UFormField>
-          <UFormField label="Phone">
-            <UInput v-model="labForm.phone" class="w-full" />
-          </UFormField>
-          <UFormField label="Notes">
-            <UTextarea v-model="labForm.notes" class="w-full" :rows="2" />
-          </UFormField>
-          <div class="flex justify-end gap-2">
-            <UButton color="neutral" variant="ghost" type="button" @click="labFormOpen = false">Cancel</UButton>
-            <UButton type="submit" class="bg-[#0097A7]" :loading="labSaving">Save</UButton>
-          </div>
-        </form>
+            <template v-if="leadStatus.can_use">
+              Connected
+              <template v-if="leadStatus.linked_user?.name || leadStatus.linked_user?.email">
+                · {{ leadStatus.linked_user?.name || leadStatus.linked_user?.email }}
+              </template>
+            </template>
+            <template v-else-if="leadStatus.enabled">
+              Enabled — waiting for API token
+            </template>
+            <template v-else>
+              Not enabled for this clinic
+            </template>
+          </p>
+        </div>
+        <div v-else-if="isSection(itemId)" class="p-6 text-sm text-slate-500">Unknown section.</div>
       </template>
-    </UModal>
-  </div>
+    </template>
+  </DeskMasterDetailPanel>
+
+  <DeskSetupUnlockModal v-model:open="unlockOpen" @unlocked="onUnlocked" />
 </template>

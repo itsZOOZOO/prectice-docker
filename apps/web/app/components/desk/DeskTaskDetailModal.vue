@@ -32,7 +32,9 @@ const emit = defineEmits<{
 
 const { api } = useApi()
 const toast = useToast()
+const route = useRoute()
 const router = useRouter()
+const { openPatient: deskOpenPatient } = useDeskUrl()
 
 const loading = ref(false)
 const saving = ref(false)
@@ -128,6 +130,10 @@ function openPatient() {
   if (!detail.value?.client_id) return
   const id = detail.value.client_id
   open.value = false
+  if (route.path.startsWith('/desk')) {
+    void deskOpenPatient(id)
+    return
+  }
   void router.push(`/clients/${id}`)
 }
 

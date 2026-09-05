@@ -382,12 +382,28 @@ def receipts_today(
         .order_by(MoneyReceipt.received_at.desc())
         .all()
     )
+    client_ids = {r.client_id for r in rows}
+    names: dict[int, str] = {}
+    if client_ids:
+        for c in (
+            db.query(Client.client_id, Client.name)
+            .filter(Client.clinic_id == user.clinic_id, Client.client_id.in_(client_ids))
+            .all()
+        ):
+            names[c.client_id] = c.name
+
+    items = []
+    for r in rows:
+        item = _receipt_out(r)
+        item["client_name"] = names.get(r.client_id) or f"Patient #{r.client_id}"
+        items.append(item)
+
     total = float(sum((r.amount for r in rows), Decimal("0")))
     return OkResponse(
         data={
             "date": day.isoformat(),
             "total": total,
             "count": len(rows),
-            "items": [_receipt_out(r) for r in rows],
+            "items": items,
         }
     )

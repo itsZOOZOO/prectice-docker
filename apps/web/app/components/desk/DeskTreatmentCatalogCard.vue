@@ -27,14 +27,31 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  openPhoto: [url: string]
+  openPhoto: [payload: { photos: string[], index: number }]
 }>()
 
 const pricingOpen = ref(false)
 
+const galleryPhotos = computed(() => {
+  if (props.treatment.all_photos.length) return props.treatment.all_photos
+  return props.treatment.photos
+})
+
 const heroPhoto = computed(
   () => props.treatment.photos[0] ?? props.treatment.all_photos[0] ?? null
 )
+
+function openAt(url: string) {
+  const photos = galleryPhotos.value
+  if (!photos.length) return
+  const index = Math.max(0, photos.indexOf(url))
+  emit('openPhoto', { photos, index: index === -1 ? 0 : index })
+}
+
+function openHero() {
+  if (!heroPhoto.value) return
+  openAt(heroPhoto.value)
+}
 
 function formatInr(n: number) {
   return `₹${Number(n).toLocaleString('en-IN')}`
@@ -53,7 +70,7 @@ function formatPriceRange(min: number, max: number) {
         v-if="heroPhoto"
         type="button"
         class="block h-full w-full"
-        @click="emit('openPhoto', heroPhoto)"
+        @click="openHero"
       >
         <img
           :src="heroPhoto"
@@ -86,7 +103,7 @@ function formatPriceRange(min: number, max: number) {
         :key="`${url}-${index}`"
         type="button"
         class="block h-14 w-14 shrink-0 overflow-hidden rounded-lg border-2 border-slate-200"
-        @click="emit('openPhoto', url)"
+        @click="openAt(url)"
       >
         <img
           :src="url"

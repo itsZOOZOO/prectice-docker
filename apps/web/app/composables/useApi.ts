@@ -1,3 +1,5 @@
+import { setupUnlockHeaders } from '~/utils/setupAccess'
+
 type ApiEnvelope<T> = {
   ok: boolean
   data?: T
@@ -8,15 +10,21 @@ export function useApi() {
   const config = useRuntimeConfig()
   const auth = useAuth()
 
+  function authHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {}
+    if (auth.token.value) {
+      headers.Authorization = `Bearer ${auth.token.value}`
+    }
+    Object.assign(headers, setupUnlockHeaders())
+    return headers
+  }
+
   async function api<T>(path: string, opts: {
     method?: string
     body?: unknown
     query?: Record<string, string | number | boolean | undefined | null>
   } = {}): Promise<T> {
-    const headers: Record<string, string> = {}
-    if (auth.token.value) {
-      headers.Authorization = `Bearer ${auth.token.value}`
-    }
+    const headers = authHeaders()
 
     const isForm = typeof FormData !== 'undefined' && opts.body instanceof FormData
 
@@ -52,10 +60,7 @@ export function useApi() {
     method?: string
     body?: unknown
   } = {}): Promise<Blob> {
-    const headers: Record<string, string> = {}
-    if (auth.token.value) {
-      headers.Authorization = `Bearer ${auth.token.value}`
-    }
+    const headers = authHeaders()
     const isForm = typeof FormData !== 'undefined' && opts.body instanceof FormData
     try {
       return await $fetch<Blob>(`${config.public.apiBase}${path}`, {

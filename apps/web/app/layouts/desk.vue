@@ -1,11 +1,28 @@
 <script setup lang="ts">
+import {
+  fetchUnreadActivityCount,
+  type ActivityFeedPayload
+} from '~/utils/activity'
+
 const route = useRoute()
 const { clinicName, user, hydrate, logout, isSuperadmin } = useAuth()
 hydrate()
 
 const { view, title, setView, openPatient, patientId } = useDeskUrl()
 const { api } = useApi()
+const toast = useToast()
+const {
+  pinConfigured,
+  isUnlocked,
+  minutesRemaining,
+  locking,
+  lock: lockSetup,
+  hydrateFromStorage,
+  fetchStatus
+} = useSetupAccess()
 const { isDesktop } = useDeviceHome()
+const reportsUnlockOpen = ref(false)
+const reportsLocked = computed(() => pinConfigured.value && !isUnlocked.value)
 const preferMobileView = computed(() => !isDesktop.value)
 const mismatchAttention = useViewMismatchAttention(preferMobileView)
 const mobileSwitchClass = computed(() => viewSwitchClass(preferMobileView.value, mismatchAttention.value))
@@ -26,19 +43,41 @@ const searchResults = ref<{ client_id: number, name: string, number: string | nu
 const addOpen = ref(false)
 const bookOpen = ref(false)
 const bookPatient = ref<{ id: number, name: string } | null>(null)
+const activityOpen = ref(false)
+const activityCount = ref<number | null>(null)
 const badges = ref({ checked_in: 0, appointments_today: 0, open_tasks: 0, lab_action_needed: 0 })
 const searchTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
 const clinicInitial = computed(() => String(clinicName.value || 'P').charAt(0))
 
 const nav = [
-  { key: 'dashboard' as const, label: 'Dashboard', icon: '▦' },
-  { key: 'patients' as const, label: 'Patients', icon: '👥' },
-  { key: 'calendar' as const, label: 'Calendar', icon: '📅' },
-  { key: 'lab' as const, label: 'Lab', icon: '🦷' },
-  { key: 'tasks' as const, label: 'Tasks', icon: '📋' },
-  { key: 'settings' as const, label: 'Settings', icon: '⚙' }
+  { key: 'dashboard' as const, label: 'Dashboard', icon: '▦', locked: false },
+  { key: 'patients' as const, label: 'Patients', icon: '👥', locked: false },
+  { key: 'calendar' as const, label: 'Calendar', icon: '📅', locked: false },
+  { key: 'lab' as const, label: 'Lab', icon: '🦷', locked: false },
+  { key: 'tasks' as const, label: 'Tasks', icon: '📋', locked: false },
+  { key: 'statistics' as const, label: 'Reports', icon: '📊', locked: true },
+  { key: 'settings' as const, label: 'Settings', icon: '⚙', locked: false }
 ]
+
+function onNavClick(key: typeof nav[number]['key']) {
+  if (key === 'statistics' && reportsLocked.value) {
+    reportsUnlockOpen.value = true
+    return
+  }
+  void setView(key)
+}
+
+function onReportsUnlocked() {
+  reportsUnlockOpen.value = false
+  void setView('statistics')
+}
+
+watch(view, (v) => {
+  if (v === 'statistics' && reportsLocked.value) {
+    reportsUnlockOpen.value = true
+  }
+})
 
 onMounted(() => {
   try {
@@ -46,7 +85,19 @@ onMounted(() => {
   } catch { /* ignore */ }
   refreshBadges()
   void refreshMe()
+  void refreshActivityCount()
+  hydrateFromStorage()
+  void fetchStatus().catch(() => { /* ignore */ }).then(() => {
+    if (view.value === 'statistics' && reportsLocked.value) {
+      reportsUnlockOpen.value = true
+    }
+  })
 })
+
+async function onLockSetup() {
+  await lockSetup()
+  toast.add({ title: 'Clinic setup locked', color: 'success' })
+}
 
 async function refreshMe() {
   try {
@@ -83,6 +134,21 @@ async function refreshBadges() {
     }
   } catch { /* ignore */ }
 }
+
+async function refreshActivityCount() {
+  try {
+    activityCount.value = await fetchUnreadActivityCount(params =>
+      api<ActivityFeedPayload>('/activity', { query: params })
+    )
+  } catch {
+    activityCount.value = null
+  }
+}
+
+watch([view, activityOpen], () => {
+  void refreshActivityCount()
+  refreshBadges()
+})
 
 function onSearchInput() {
   searchOpen.value = true
@@ -196,11 +262,17 @@ useSeoMeta({ title: title })
               collapsed ? 'justify-center px-2 py-2.5' : 'gap-3 px-3 py-2.5',
               view === item.key ? 'bg-[#0097A7]/10 text-[#0097A7]' : 'text-slate-600 hover:bg-slate-50'
             ]"
-            :title="item.label"
-            @click="setView(item.key)"
+            :title="item.locked && reportsLocked ? `${item.label} (locked)` : item.label"
+            @click="onNavClick(item.key)"
           >
             <span class="text-base">{{ item.icon }}</span>
             <span v-if="!collapsed" class="flex-1">{{ item.label }}</span>
+            <span
+              v-if="item.locked && reportsLocked && !collapsed"
+              class="text-[11px] text-amber-600"
+              title="Locked — unlock with setup PIN"
+              aria-label="Locked"
+            >🔒</span>
             <span
               v-if="badgeFor(item.key) > 0"
               class="flex h-5 min-w-5 items-center justify-center rounded-full bg-[#0097A7] px-1 text-[10px] font-semibold text-white"
@@ -250,63 +322,88 @@ useSeoMeta({ title: title })
       </aside>
 
       <div class="desk-shell__main">
-        <header class="flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
-          <h1 class="shrink-0 text-lg font-semibold text-[#1C2B35]">{{ headerTitle }}</h1>
-          <div v-if="!isAdminRoute" class="ml-auto flex min-w-0 items-center gap-2">
-            <div class="relative w-full min-w-0 max-w-md sm:w-[320px]">
-              <div class="flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3">
-                <span class="text-slate-400">🔍</span>
-                <input
-                  ref="searchInput"
-                  v-model="search"
-                  type="search"
-                  placeholder="Search name, phone, area…"
-                  class="min-w-0 flex-1 border-none bg-transparent text-sm outline-none placeholder:text-slate-400"
-                  @input="onSearchInput"
-                  @focus="searchOpen = true"
+        <div class="shrink-0">
+          <header class="flex items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
+            <h1 class="shrink-0 text-lg font-semibold text-[#1C2B35]">{{ headerTitle }}</h1>
+            <div v-if="!isAdminRoute" class="ml-auto flex min-w-0 items-center gap-2">
+              <div class="relative w-full min-w-0 max-w-md sm:w-[320px]">
+                <div class="flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3">
+                  <span class="text-slate-400">🔍</span>
+                  <input
+                    ref="searchInput"
+                    v-model="search"
+                    type="search"
+                    placeholder="Search name, phone, area…"
+                    class="min-w-0 flex-1 border-none bg-transparent text-sm outline-none placeholder:text-slate-400"
+                    @input="onSearchInput"
+                    @focus="searchOpen = true"
+                  >
+                </div>
+                <div
+                  v-if="searchOpen && search.trim().length >= 2"
+                  class="absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg"
                 >
+                  <p v-if="searching" class="px-3 py-2.5 text-xs text-slate-400">Searching…</p>
+                  <p v-else-if="!searchResults.length" class="px-3 py-2.5 text-xs text-slate-400">No patients found</p>
+                  <button
+                    v-for="row in searchResults"
+                    :key="row.client_id"
+                    type="button"
+                    class="flex w-full items-center gap-2 border-b border-slate-50 px-3 py-2 text-left last:border-b-0 hover:bg-slate-50"
+                    @click="pickSearch(row.client_id)"
+                  >
+                    <div class="flex h-8 w-8 items-center justify-center rounded-full bg-[#e0f7fa] text-xs font-semibold text-[#0097A7]">
+                      {{ row.name.charAt(0) }}
+                    </div>
+                    <div class="min-w-0">
+                      <p class="truncate text-sm font-medium">{{ row.name }}</p>
+                      <p class="truncate text-xs text-slate-500">{{ row.number || '—' }}<span v-if="row.place"> · {{ row.place }}</span></p>
+                    </div>
+                  </button>
+                </div>
               </div>
-              <div
-                v-if="searchOpen && search.trim().length >= 2"
-                class="absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg"
+              <button
+                type="button"
+                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-[#e0f7fa] text-[#0097A7] hover:bg-[#b2ebf2]"
+                title="Add patient (Ctrl+N)"
+                @click="addOpen = true"
               >
-                <p v-if="searching" class="px-3 py-2.5 text-xs text-slate-400">Searching…</p>
-                <p v-else-if="!searchResults.length" class="px-3 py-2.5 text-xs text-slate-400">No patients found</p>
-                <button
-                  v-for="row in searchResults"
-                  :key="row.client_id"
-                  type="button"
-                  class="flex w-full items-center gap-2 border-b border-slate-50 px-3 py-2 text-left last:border-b-0 hover:bg-slate-50"
-                  @click="pickSearch(row.client_id)"
+                <UIcon name="i-lucide-user-plus" class="h-[18px] w-[18px]" />
+              </button>
+              <button
+                type="button"
+                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-[#e0f7fa] text-[#0097A7] hover:bg-[#b2ebf2]"
+                title="Book appointment (Ctrl+B)"
+                @click="openHeaderBook"
+              >
+                <UIcon name="i-lucide-calendar-plus" class="h-[18px] w-[18px]" />
+              </button>
+              <div class="relative shrink-0">
+                <span
+                  v-if="activityCount != null && activityCount > 0"
+                  class="absolute -right-1 -top-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#0097A7] px-1 text-[10px] font-semibold text-white"
                 >
-                  <div class="flex h-8 w-8 items-center justify-center rounded-full bg-[#e0f7fa] text-xs font-semibold text-[#0097A7]">
-                    {{ row.name.charAt(0) }}
-                  </div>
-                  <div class="min-w-0">
-                    <p class="truncate text-sm font-medium">{{ row.name }}</p>
-                    <p class="truncate text-xs text-slate-500">{{ row.number || '—' }}<span v-if="row.place"> · {{ row.place }}</span></p>
-                  </div>
+                  {{ activityCount > 99 ? '99+' : activityCount }}
+                </span>
+                <button
+                  type="button"
+                  class="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-[#e0f7fa] text-[#0097A7] hover:bg-[#b2ebf2]"
+                  title="Activity log"
+                  aria-label="Activity log"
+                  @click="activityOpen = true"
+                >
+                  <UIcon name="i-lucide-bell" class="h-[18px] w-[18px]" />
                 </button>
               </div>
             </div>
-            <button
-              type="button"
-              class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-[#e0f7fa] text-[#0097A7] hover:bg-[#b2ebf2]"
-              title="Add patient (Ctrl+N)"
-              @click="addOpen = true"
-            >
-              <UIcon name="i-lucide-user-plus" class="h-[18px] w-[18px]" />
-            </button>
-            <button
-              type="button"
-              class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-[#e0f7fa] text-[#0097A7] hover:bg-[#b2ebf2]"
-              title="Book appointment (Ctrl+B)"
-              @click="openHeaderBook"
-            >
-              <UIcon name="i-lucide-calendar-plus" class="h-[18px] w-[18px]" />
-            </button>
-          </div>
-        </header>
+          </header>
+          <DeskSetupAccessBanner
+            v-if="isUnlocked"
+            :minutes-remaining="minutesRemaining"
+            :busy="locking"
+            @lock="onLockSetup"
+          />
+        </div>
 
         <main class="desk-shell__content">
           <slot />
@@ -314,12 +411,21 @@ useSeoMeta({ title: title })
       </div>
     </div>
 
-    <DeskAddPatientModal v-model:open="addOpen" @created="(id) => { refreshBadges(); openPatient(id) }" />
+    <DeskAddPatientModal v-model:open="addOpen" @created="(id) => { refreshBadges(); void refreshActivityCount(); openPatient(id) }" />
     <DeskBookModal
       v-model:open="bookOpen"
       :client-id="bookPatient?.id"
       :client-name="bookPatient?.name"
-      @booked="refreshBadges"
+      @booked="() => { refreshBadges(); void refreshActivityCount() }"
+    />
+    <DeskActivityLogSheet
+      v-model:open="activityOpen"
+      @read-state-change="refreshActivityCount"
+      @open-patient="(id) => openPatient(id)"
+    />
+    <DeskSetupUnlockModal
+      v-model:open="reportsUnlockOpen"
+      @unlocked="onReportsUnlocked"
     />
   </div>
 </template>

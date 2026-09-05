@@ -55,6 +55,10 @@ function openCase(id: number) {
 }
 
 async function quickSent(item: LabCaseListItem) {
+  const due = addClinicWorkingDays(todayYmdLocal(), 3)
+  if (!window.confirm(
+    `Mark ${item.case_ref} (cycle ${item.current_cycle_number}) as sent to ${item.lab_name}?\nExpected return: ${due}`
+  )) return
   busyCaseId.value = item.case_id
   try {
     await api(`/lab-cases/${item.case_id}/cycles/${item.current_cycle_number}/stages`, {
@@ -62,7 +66,7 @@ async function quickSent(item: LabCaseListItem) {
       body: {
         stage: 'sent',
         action: 'set',
-        expected_return_date: addClinicWorkingDays(todayYmdLocal(), 3)
+        expected_return_date: due
       }
     })
     toast.add({ title: 'Marked sent', color: 'success' })
@@ -76,6 +80,9 @@ async function quickSent(item: LabCaseListItem) {
 }
 
 async function quickReceived(item: LabCaseListItem) {
+  if (!window.confirm(
+    `Mark ${item.case_ref} (cycle ${item.current_cycle_number}) as received from ${item.lab_name}?`
+  )) return
   busyCaseId.value = item.case_id
   try {
     await api(`/lab-cases/${item.case_id}/cycles/${item.current_cycle_number}/stages`, {
@@ -83,6 +90,24 @@ async function quickReceived(item: LabCaseListItem) {
       body: { stage: 'received', action: 'set' }
     })
     toast.add({ title: 'Marked received', color: 'success' })
+    await load()
+    refreshBadges()
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Failed', color: 'error' })
+  } finally {
+    busyCaseId.value = null
+  }
+}
+
+async function startNextStage(item: LabCaseListItem) {
+  const next = item.current_cycle_number + 1
+  if (!window.confirm(
+    `Start next stage for ${item.case_ref}?\nThis opens cycle ${next} (send pending again).`
+  )) return
+  busyCaseId.value = item.case_id
+  try {
+    await api(`/lab-cases/${item.case_id}/cycles`, { method: 'POST' })
+    toast.add({ title: `Stage ${next} started`, color: 'success' })
     await load()
     refreshBadges()
   } catch (e: unknown) {
@@ -197,6 +222,16 @@ function countFor(key?: keyof LabCaseSummaryCounts) {
               @click="bookFor(item)"
             >
               Book
+            </UButton>
+            <UButton
+              v-if="item.stage === 'received' && item.status === 'open'"
+              size="xs"
+              color="primary"
+              variant="outline"
+              :loading="busyCaseId === item.case_id"
+              @click="startNextStage(item)"
+            >
+              Start next stage
             </UButton>
             <UButton size="xs" color="neutral" variant="outline" @click="openCase(item.case_id)">
               Open

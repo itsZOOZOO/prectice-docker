@@ -435,6 +435,21 @@ def create_appointment(
     db.commit()
     db.refresh(appt)
 
+    from app import activity_log
+
+    activity_log.appointment_booked(
+        db,
+        clinic_id=user.clinic_id,
+        actor_user_id=user.user_id,
+        appointment_id=appt.appointment_id,
+        client_id=appt.client_id,
+        payload={
+            "name": appt.name,
+            "appointment_date": appt.appointment_date.isoformat(),
+            "appointment_time": appt.appointment_time.strftime("%H:%M:%S"),
+        },
+    )
+
     background_tasks.add_task(
         reporting.send_app_notification,
         reporting.format_booked(
@@ -595,6 +610,10 @@ def update_appointment(
         exclude_appointment_id=appointment_id,
     )
 
+    old_status_for_log = appt.status
+    status_changed = False
+    new_status_for_log: str | None = None
+
     if body.status is not None:
         allowed = {
             s.status_name
@@ -604,6 +623,9 @@ def update_appointment(
         }
         if body.status not in allowed:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status")
+        if body.status != old_status_for_log:
+            status_changed = True
+            new_status_for_log = body.status
         appt.status = body.status
 
     appt.client_id = body.client_id
@@ -619,6 +641,22 @@ def update_appointment(
 
     db.commit()
     db.refresh(appt)
+
+    if status_changed and new_status_for_log is not None:
+        from app import activity_log
+
+        activity_log.appointment_status_changed(
+            db,
+            clinic_id=user.clinic_id,
+            actor_user_id=user.user_id,
+            appointment_id=appt.appointment_id,
+            client_id=appt.client_id,
+            payload={
+                "name": appt.name,
+                "old_status": old_status_for_log,
+                "new_status": new_status_for_log,
+            },
+        )
 
     background_tasks.add_task(
         reporting.send_app_notification,
@@ -807,6 +845,22 @@ def update_status(
     appt.status = body.status
     db.commit()
     db.refresh(appt)
+
+    if body.status != old_status:
+        from app import activity_log
+
+        activity_log.appointment_status_changed(
+            db,
+            clinic_id=user.clinic_id,
+            actor_user_id=user.user_id,
+            appointment_id=appt.appointment_id,
+            client_id=appt.client_id,
+            payload={
+                "name": appt.name,
+                "old_status": old_status,
+                "new_status": body.status,
+            },
+        )
 
     if (
         body.status != old_status

@@ -2,14 +2,15 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
+from app import client_filters as client_filters_svc
 from app.datetime_local import parse_clinic_local_datetime
 from app.db import get_db
 from app import media as media_svc
-from app.models import Client, ClientCheckinLog, Note, NoteAttachment, User
+from app.models import Bill, Client, ClientCheckinLog, MoneyReceipt, Note, NoteAttachment, User
 from app.schemas import (
     CheckinOut,
     ClientCreate,
@@ -41,11 +42,118 @@ def _author_name(user: User | None) -> str | None:
     return name or user.username
 
 
-def _serialize_client(client: Client) -> dict:
+def _pending_bills_by_client(db: Session, clinic_id: int, client_ids: list[int]) -> dict[int, dict]:
+    """Latest collectable bill per client with remaining balance (desk checked-in Collect)."""
+    if not client_ids:
+        return {}
+    bills = (
+        db.query(Bill)
+        .filter(
+            Bill.clinic_id == clinic_id,
+            Bill.client_id.in_(client_ids),
+            Bill.visible.is_(True),
+            func.lower(Bill.status).in_(("pending", "partial", "open")),
+        )
+        .order_by(Bill.issued_at.desc(), Bill.bill_id.desc())
+        .all()
+    )
+    latest: dict[int, Bill] = {}
+    for bill in bills:
+        if bill.client_id not in latest:
+            latest[bill.client_id] = bill
+    if not latest:
+        return {}
+
+    bill_ids = [b.bill_id for b in latest.values()]
+    paid_rows = (
+        db.query(MoneyReceipt.bill_id, func.coalesce(func.sum(MoneyReceipt.amount), 0))
+        .filter(MoneyReceipt.bill_id.in_(bill_ids), MoneyReceipt.visible.is_(True))
+        .group_by(MoneyReceipt.bill_id)
+        .all()
+    )
+    paid_map = {int(bill_id): float(paid or 0) for bill_id, paid in paid_rows}
+
+    out: dict[int, dict] = {}
+    for client_id, bill in latest.items():
+        total = float(bill.amount_due or 0)
+        paid = paid_map.get(bill.bill_id, 0.0)
+        balance = max(0.0, total - paid)
+        out[client_id] = {
+            "pending_bill_id": bill.bill_id,
+            "pending_amount": balance,
+            "pending_bill_total": total,
+            "pending_total_paid": paid,
+        }
+    return out
+
+
+def _last_payments_by_client(db: Session, clinic_id: int, client_ids: list[int]) -> dict[int, dict]:
+    """Most recent visible receipt per client (for checked-in last-payment strip)."""
+    if not client_ids:
+        return {}
+    receipts = (
+        db.query(MoneyReceipt)
+        .filter(
+            MoneyReceipt.clinic_id == clinic_id,
+            MoneyReceipt.client_id.in_(client_ids),
+            MoneyReceipt.visible.is_(True),
+        )
+        .order_by(MoneyReceipt.received_at.desc(), MoneyReceipt.receipt_id.desc())
+        .all()
+    )
+    latest: dict[int, MoneyReceipt] = {}
+    for r in receipts:
+        if r.client_id not in latest:
+            latest[r.client_id] = r
+    if not latest:
+        return {}
+
+    bill_ids = [r.bill_id for r in latest.values() if r.bill_id]
+    bill_totals: dict[int, float] = {}
+    if bill_ids:
+        for bill in db.query(Bill).filter(Bill.bill_id.in_(bill_ids)).all():
+            bill_totals[bill.bill_id] = float(bill.amount_due or 0)
+
+    out: dict[int, dict] = {}
+    for client_id, r in latest.items():
+        out[client_id] = {
+            "last_payment_amount": float(r.amount or 0),
+            "last_payment_mode": r.payment_mode,
+            "last_payment_at": r.received_at.isoformat() if r.received_at else None,
+            "last_payment_bill_total": bill_totals.get(r.bill_id) if r.bill_id else None,
+        }
+    return out
+
+
+def _serialize_client(
+    client: Client,
+    pending: dict | None = None,
+    last_payment: dict | None = None,
+) -> dict:
     data = ClientOut.model_validate(client).model_dump()
     key = (client.profile_photo_url or "").strip() or None
     data["profile_photo_key"] = key
     data["profile_photo_url"] = media_svc.resolve_media_key(key) if key else None
+    if pending:
+        data["pending_bill_id"] = int(pending.get("pending_bill_id") or 0)
+        data["pending_amount"] = float(pending.get("pending_amount") or 0)
+        data["pending_bill_total"] = pending.get("pending_bill_total")
+        data["pending_total_paid"] = float(pending.get("pending_total_paid") or 0)
+    else:
+        data["pending_bill_id"] = 0
+        data["pending_amount"] = 0.0
+        data["pending_bill_total"] = None
+        data["pending_total_paid"] = 0.0
+    if last_payment and last_payment.get("last_payment_amount"):
+        data["last_payment_amount"] = float(last_payment["last_payment_amount"])
+        data["last_payment_mode"] = last_payment.get("last_payment_mode")
+        data["last_payment_at"] = last_payment.get("last_payment_at")
+        data["last_payment_bill_total"] = last_payment.get("last_payment_bill_total")
+    else:
+        data["last_payment_amount"] = None
+        data["last_payment_mode"] = None
+        data["last_payment_at"] = None
+        data["last_payment_bill_total"] = None
     return data
 
 
@@ -106,24 +214,43 @@ def list_clients(
     db: Annotated[Session, Depends(get_db)],
     q: str | None = Query(default=None),
     checked_in: bool | None = Query(default=None),
+    filter_id: int | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> OkResponse:
     query = db.query(Client).filter(Client.clinic_id == user.clinic_id, Client.visible.is_(True))
 
+    if filter_id is not None:
+        ids = client_filters_svc.client_ids_for_filter(db, user.clinic_id, filter_id)
+        if not ids:
+            return OkResponse(data={"total": 0, "items": []})
+        query = query.filter(Client.client_id.in_(ids))
+
     if q:
         like = f"%{q.strip()}%"
-        query = query.filter(or_(Client.name.ilike(like), Client.number.ilike(like), Client.calling_name.ilike(like)))
+        query = query.filter(
+            or_(Client.name.ilike(like), Client.number.ilike(like), Client.calling_name.ilike(like))
+        )
 
     if checked_in is not None:
         query = query.filter(Client.check_in_status.is_(checked_in))
 
     total = query.count()
     rows = query.order_by(Client.updated_at.desc()).offset(offset).limit(limit).all()
+    client_ids = [r.client_id for r in rows]
+    pending_map = _pending_bills_by_client(db, user.clinic_id, client_ids)
+    last_pay_map = _last_payments_by_client(db, user.clinic_id, client_ids)
     return OkResponse(
         data={
             "total": total,
-            "items": [_serialize_client(r) for r in rows],
+            "items": [
+                _serialize_client(
+                    r,
+                    pending_map.get(r.client_id),
+                    last_pay_map.get(r.client_id),
+                )
+                for r in rows
+            ],
         }
     )
 
@@ -153,7 +280,19 @@ def create_client(
     db.add(client)
     db.commit()
     db.refresh(client)
-    return OkResponse(data=_serialize_client(client))
+    data = _serialize_client(client)
+
+    from app import activity_log
+
+    activity_log.client_created(
+        db,
+        clinic_id=user.clinic_id,
+        actor_user_id=user.user_id,
+        client_id=client.client_id,
+        payload={"name": client.name},
+    )
+
+    return OkResponse(data=data)
 
 
 @router.get("/{client_id}", response_model=OkResponse)

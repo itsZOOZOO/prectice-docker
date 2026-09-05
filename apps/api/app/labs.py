@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import Date, Time, and_, cast, exists, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app import media as media_svc
@@ -74,6 +74,8 @@ def derive_action_category(
     received = bool(cycle.received_at)
     send_pending = bool(cycle.send_pending_at)
 
+    if sent and not received and expected is None:
+        return "at_lab_missing_due"
     if sent and not received and expected is not None and expected < today:
         return "at_lab_overdue"
     if send_pending and not sent:
@@ -103,17 +105,67 @@ def expected_return_from_offset(offset_days: int, from_date: date | None = None)
     return add_clinic_working_days(start, offset_days)
 
 
-def _future_appt_exists(db: Session, clinic_id: int, client_id: int, today: date) -> bool:
-    return (
-        db.query(Appointment.appointment_id)
-        .filter(
+def _as_ist(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=IST)
+    return dt.astimezone(IST)
+
+
+def _appointment_after_received_clause(received_at_col):
+    """Appointments strictly after lab receive time (IST date/time)."""
+    recv_local = func.timezone("Asia/Kolkata", received_at_col)
+    recv_date = cast(recv_local, Date)
+    recv_time = cast(recv_local, Time)
+    return or_(
+        Appointment.appointment_date > recv_date,
+        and_(
+            Appointment.appointment_date == recv_date,
+            Appointment.appointment_time > recv_time,
+        ),
+    )
+
+
+def _future_appt_exists(
+    db: Session,
+    clinic_id: int,
+    client_id: int,
+    today: date,
+    *,
+    after: datetime | None = None,
+) -> bool:
+    """True if client has a non-cancelled appointment still upcoming and after receive time."""
+    q = db.query(Appointment.appointment_id).filter(
+        Appointment.clinic_id == clinic_id,
+        Appointment.client_id == client_id,
+        Appointment.appointment_date >= today,
+        Appointment.status.notin_(["Cancelled"]),
+    )
+    if after is not None:
+        after_ist = _as_ist(after)
+        after_d = after_ist.date()
+        after_t = after_ist.time().replace(microsecond=0)
+        q = q.filter(
+            or_(
+                Appointment.appointment_date > after_d,
+                and_(
+                    Appointment.appointment_date == after_d,
+                    Appointment.appointment_time > after_t,
+                ),
+            )
+        )
+    return q.first() is not None
+
+
+def _received_needs_appointment_exists(clinic_id: int, today: date):
+    """EXISTS: appointment on/after today AND after this cycle's received_at."""
+    return exists(
+        select(Appointment.appointment_id).where(
+            Appointment.client_id == LabCase.client_id,
             Appointment.clinic_id == clinic_id,
-            Appointment.client_id == client_id,
             Appointment.appointment_date >= today,
             Appointment.status.notin_(["Cancelled"]),
+            _appointment_after_received_clause(LabCaseCycle.received_at),
         )
-        .first()
-        is not None
     )
 
 
@@ -251,14 +303,7 @@ def _case_query(db: Session, clinic_id: int):
 
 
 def _apply_filter(query, filter_name: str, clinic_id: int, today: date):
-    future_appt = exists(
-        select(Appointment.appointment_id).where(
-            Appointment.client_id == LabCase.client_id,
-            Appointment.clinic_id == clinic_id,
-            Appointment.appointment_date >= today,
-            Appointment.status.notin_(["Cancelled"]),
-        )
-    )
+    future_appt = _received_needs_appointment_exists(clinic_id, today)
     if filter_name == "blocked_on_clinic":
         return query.filter(
             LabCase.status == "open",
@@ -272,12 +317,15 @@ def _apply_filter(query, filter_name: str, clinic_id: int, today: date):
             LabCaseCycle.received_at.is_(None),
         )
     if filter_name == "at_lab_overdue":
+        # Past due OR missing expected return (both need clinic attention).
         return query.filter(
             LabCase.status == "open",
             LabCaseCycle.sent_at.isnot(None),
             LabCaseCycle.received_at.is_(None),
-            LabCaseCycle.expected_return_date.isnot(None),
-            LabCaseCycle.expected_return_date < today,
+            or_(
+                LabCaseCycle.expected_return_date.is_(None),
+                LabCaseCycle.expected_return_date < today,
+            ),
         )
     if filter_name == "received_no_future_appointment":
         return query.filter(
@@ -303,8 +351,10 @@ def _apply_filter(query, filter_name: str, clinic_id: int, today: date):
                 LabCase.status == "open",
                 LabCaseCycle.sent_at.isnot(None),
                 LabCaseCycle.received_at.is_(None),
-                LabCaseCycle.expected_return_date.isnot(None),
-                LabCaseCycle.expected_return_date < today,
+                or_(
+                    LabCaseCycle.expected_return_date.is_(None),
+                    LabCaseCycle.expected_return_date < today,
+                ),
             ),
             and_(
                 LabCase.status == "open",
@@ -322,7 +372,13 @@ def list_cases(db: Session, clinic_id: int, filter_name: str = "action_needed") 
     rows = q.order_by(LabCase.case_id.desc()).limit(500).all()
     items: list[dict] = []
     for case, client, lab, cycle in rows:
-        has_future = _future_appt_exists(db, clinic_id, case.client_id, today)
+        has_future = _future_appt_exists(
+            db,
+            clinic_id,
+            case.client_id,
+            today,
+            after=cycle.received_at if cycle else None,
+        )
         items.append(
             serialize_case(
                 db,
@@ -349,7 +405,13 @@ def list_cases_for_client(db: Session, clinic_id: int, client_id: int) -> list[d
     )
     items: list[dict] = []
     for case, client, lab, cycle in rows:
-        has_future = _future_appt_exists(db, clinic_id, case.client_id, today)
+        has_future = _future_appt_exists(
+            db,
+            clinic_id,
+            case.client_id,
+            today,
+            after=cycle.received_at if cycle else None,
+        )
         items.append(
             serialize_case(
                 db,
@@ -371,7 +433,13 @@ def get_case_detail(db: Session, case_id: int, clinic_id: int) -> dict:
     lab = get_lab_or_404(db, case.lab_id, clinic_id)
     today = today_ist()
     cycle = _active_cycle(case)
-    has_future = _future_appt_exists(db, clinic_id, case.client_id, today)
+    has_future = _future_appt_exists(
+        db,
+        clinic_id,
+        case.client_id,
+        today,
+        after=cycle.received_at if cycle else None,
+    )
     return serialize_case(
         db,
         case,
@@ -387,14 +455,7 @@ def get_case_detail(db: Session, case_id: int, clinic_id: int) -> dict:
 
 def summary_counts(db: Session, clinic_id: int) -> dict:
     today = today_ist()
-    future_appt = exists(
-        select(Appointment.appointment_id).where(
-            Appointment.client_id == LabCase.client_id,
-            Appointment.clinic_id == clinic_id,
-            Appointment.appointment_date >= today,
-            Appointment.status.notin_(["Cancelled"]),
-        )
-    )
+    future_appt = _received_needs_appointment_exists(clinic_id, today)
     base = (
         db.query(LabCase, LabCaseCycle)
         .join(
@@ -425,8 +486,10 @@ def summary_counts(db: Session, clinic_id: int) -> dict:
             LabCase.status == "open",
             LabCaseCycle.sent_at.isnot(None),
             LabCaseCycle.received_at.is_(None),
-            LabCaseCycle.expected_return_date.isnot(None),
-            LabCaseCycle.expected_return_date < today,
+            or_(
+                LabCaseCycle.expected_return_date.is_(None),
+                LabCaseCycle.expected_return_date < today,
+            ),
         ).count()
     )
     needs_appt = (
@@ -667,21 +730,23 @@ def set_stage(
         if stage == "sent":
             if not cycle.send_pending_at or cycle.sent_at:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Case cannot be marked sent")
-            return_date = None
-            if expected_return_date and expected_return_date.strip():
-                try:
-                    return_date = date.fromisoformat(expected_return_date.strip())
-                except ValueError as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Invalid expected return date",
-                    ) from exc
+            if not expected_return_date or not expected_return_date.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Expected return date is required when marking sent",
+                )
+            try:
+                return_date = date.fromisoformat(expected_return_date.strip())
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid expected return date",
+                ) from exc
             cycle.sent_at = now
             cycle.sent_by = user.user_id
             cycle.receive_pending_at = now
             cycle.receive_pending_by = user.user_id
-            if return_date is not None:
-                cycle.expected_return_date = return_date
+            cycle.expected_return_date = return_date
             cycle.updated_at = now
         elif stage == "received":
             if not cycle.sent_at or cycle.received_at:

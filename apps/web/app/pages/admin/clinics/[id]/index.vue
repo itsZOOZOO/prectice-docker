@@ -67,10 +67,167 @@ const comingSoon = [
   { title: 'Medicine templates', desc: 'Prescription medicine catalog', icon: 'i-lucide-pill' },
   { title: 'Treatment plans', desc: 'Treatment catalog & pricing', icon: 'i-lucide-stethoscope' },
   { title: 'WhatsApp', desc: 'API key, enable / disable messaging', icon: 'i-lucide-message-circle' },
-  { title: 'WA message templates', desc: 'Appointment, prescription & other defaults', icon: 'i-lucide-mail' },
-  { title: 'Leads module', desc: 'Enable / disable leads for this clinic', icon: 'i-lucide-target' },
-  { title: 'Call module', desc: 'Enable / disable call desk features', icon: 'i-lucide-phone' }
+  { title: 'WA message templates', desc: 'Appointment, prescription & other defaults', icon: 'i-lucide-mail' }
 ]
+
+type CallIntelAdmin = {
+  enabled: boolean
+  has_token: boolean
+  token_hint: string | null
+  api_base_url: string
+  default_api_base_url: string
+  can_use: boolean
+  smoke_test?: { ok: boolean, devices_count: number }
+}
+
+const callIntel = ref<CallIntelAdmin | null>(null)
+const callIntelForm = reactive({
+  enabled: false,
+  api_token: '',
+  api_base_url: '',
+  clear_token: false
+})
+const savingCallIntel = ref(false)
+const smokingCallIntel = ref(false)
+
+async function loadCallIntel() {
+  if (!Number.isFinite(clinicId.value) || clinicId.value <= 0) return
+  try {
+    callIntel.value = await api<CallIntelAdmin>(
+      `/admin/clinics/${clinicId.value}/integrations/call-intelligence`
+    )
+    callIntelForm.enabled = callIntel.value.enabled
+    callIntelForm.api_token = ''
+    callIntelForm.clear_token = false
+    callIntelForm.api_base_url =
+      callIntel.value.api_base_url === callIntel.value.default_api_base_url
+        ? ''
+        : callIntel.value.api_base_url
+  } catch {
+    callIntel.value = null
+  }
+}
+
+async function saveCallIntel() {
+  savingCallIntel.value = true
+  try {
+    callIntel.value = await api<CallIntelAdmin>(
+      `/admin/clinics/${clinicId.value}/integrations/call-intelligence`,
+      {
+        method: 'PATCH',
+        body: {
+          enabled: callIntelForm.enabled,
+          api_token: callIntelForm.api_token.trim() || null,
+          clear_token: callIntelForm.clear_token,
+          api_base_url: callIntelForm.api_base_url.trim() || null,
+          run_smoke_test: true
+        }
+      }
+    )
+    callIntelForm.api_token = ''
+    callIntelForm.clear_token = false
+    const devices = callIntel.value.smoke_test?.devices_count
+    toast.add({
+      title: devices != null
+        ? `Call Intelligence saved · smoke OK (${devices} devices)`
+        : 'Call Intelligence saved',
+      color: 'success'
+    })
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Save failed', color: 'error' })
+  } finally {
+    savingCallIntel.value = false
+  }
+}
+
+type LeadIntelAdmin = {
+  enabled: boolean
+  has_api_key: boolean
+  token_hint: string | null
+  api_base_url: string
+  default_api_base_url: string
+  can_use: boolean
+  linked_user: { id: number, name: string | null, email: string | null } | null
+  smoke_test?: { ok: boolean, linked_user: { id: number, name: string | null, email: string | null } }
+}
+
+const leadIntel = ref<LeadIntelAdmin | null>(null)
+const leadIntelForm = reactive({
+  enabled: false,
+  api_token: '',
+  api_base_url: '',
+  clear_token: false
+})
+const savingLeadIntel = ref(false)
+const smokingLeadIntel = ref(false)
+
+async function loadLeadIntel() {
+  if (!Number.isFinite(clinicId.value) || clinicId.value <= 0) return
+  try {
+    leadIntel.value = await api<LeadIntelAdmin>(
+      `/admin/clinics/${clinicId.value}/integrations/lead-intelligence`
+    )
+    leadIntelForm.enabled = leadIntel.value.enabled
+    leadIntelForm.api_token = ''
+    leadIntelForm.clear_token = false
+    leadIntelForm.api_base_url =
+      leadIntel.value.api_base_url === leadIntel.value.default_api_base_url
+        ? ''
+        : leadIntel.value.api_base_url
+  } catch {
+    leadIntel.value = null
+  }
+}
+
+async function saveLeadIntel() {
+  savingLeadIntel.value = true
+  try {
+    leadIntel.value = await api<LeadIntelAdmin>(
+      `/admin/clinics/${clinicId.value}/integrations/lead-intelligence`,
+      {
+        method: 'PATCH',
+        body: {
+          enabled: leadIntelForm.enabled,
+          api_token: leadIntelForm.api_token.trim() || null,
+          clear_token: leadIntelForm.clear_token,
+          api_base_url: leadIntelForm.api_base_url.trim() || null,
+          run_smoke_test: true
+        }
+      }
+    )
+    leadIntelForm.api_token = ''
+    leadIntelForm.clear_token = false
+    const who = leadIntel.value.smoke_test?.linked_user?.name
+      || leadIntel.value.linked_user?.name
+      || leadIntel.value.linked_user?.email
+    toast.add({
+      title: who ? `Lead Intelligence saved · linked as ${who}` : 'Lead Intelligence saved',
+      color: 'success'
+    })
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Save failed', color: 'error' })
+  } finally {
+    savingLeadIntel.value = false
+  }
+}
+
+async function smokeLeadIntel() {
+  smokingLeadIntel.value = true
+  try {
+    const data = await api<{ ok: boolean, linked_user: { name: string | null, email: string | null } }>(
+      `/admin/clinics/${clinicId.value}/integrations/lead-intelligence/smoke-test`,
+      { method: 'POST' }
+    )
+    toast.add({
+      title: `Smoke OK · ${data.linked_user?.name || data.linked_user?.email || 'linked'}`,
+      color: 'success'
+    })
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Smoke test failed', color: 'error' })
+  } finally {
+    smokingLeadIntel.value = false
+  }
+}
 
 async function load() {
   if (!Number.isFinite(clinicId.value) || clinicId.value <= 0) return
@@ -82,6 +239,8 @@ async function load() {
     ])
     clinic.value = c
     users.value = u
+    void loadCallIntel()
+    void loadLeadIntel()
   } catch (e: unknown) {
     toast.add({ title: e instanceof Error ? e.message : 'Failed to load', color: 'error' })
   } finally {
@@ -290,6 +449,155 @@ watch(clinicId, load, { immediate: true })
             </tr>
           </tbody>
         </table>
+      </section>
+
+      <!-- Call Intelligence -->
+      <section class="overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+          <div>
+            <h3 class="text-sm font-semibold text-[#1C2B35]">Call Intelligence</h3>
+            <p class="text-xs text-slate-500">
+              Per-clinic API token · clinic staff can query Reports when enabled
+            </p>
+          </div>
+          <span
+            v-if="callIntel"
+            class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+            :class="callIntel.can_use
+              ? 'bg-emerald-50 text-emerald-700'
+              : 'bg-slate-100 text-slate-500'"
+          >
+            {{ callIntel.can_use ? 'Ready' : 'Not linked' }}
+          </span>
+        </div>
+        <div class="space-y-3 p-4">
+          <label class="flex items-center gap-2 text-sm text-slate-700">
+            <input v-model="callIntelForm.enabled" type="checkbox" class="rounded border-slate-300">
+            Enable Call Intelligence for this clinic
+          </label>
+          <label class="block text-xs font-medium text-slate-600">
+            API token
+            <input
+              v-model="callIntelForm.api_token"
+              type="password"
+              autocomplete="off"
+              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              :placeholder="callIntel?.has_token
+                ? `Saved ${callIntel.token_hint || 'token'} — paste to replace`
+                : 'Paste Call Intelligence Bearer token'"
+            >
+          </label>
+          <label v-if="callIntel?.has_token" class="flex items-center gap-2 text-xs text-slate-600">
+            <input v-model="callIntelForm.clear_token" type="checkbox" class="rounded border-slate-300">
+            Clear saved token
+          </label>
+          <label class="block text-xs font-medium text-slate-600">
+            API base URL (optional)
+            <input
+              v-model="callIntelForm.api_base_url"
+              type="url"
+              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              :placeholder="callIntel?.default_api_base_url || 'https://calls.aarogyams.com/api'"
+            >
+          </label>
+          <div class="flex flex-wrap gap-2 pt-1">
+            <UButton
+              size="sm"
+              class="bg-[#0097A7]"
+              :loading="savingCallIntel"
+              @click="saveCallIntel"
+            >
+              Save &amp; smoke test
+            </UButton>
+            <UButton
+              size="sm"
+              color="neutral"
+              variant="outline"
+              :loading="smokingCallIntel"
+              :disabled="!callIntel?.has_token"
+              @click="smokeCallIntel"
+            >
+              Smoke test only
+            </UButton>
+          </div>
+        </div>
+      </section>
+
+      <!-- Lead Intelligence -->
+      <section class="overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+          <div>
+            <h3 class="text-sm font-semibold text-[#1C2B35]">Lead Intelligence</h3>
+            <p class="text-xs text-slate-500">
+              Practice API token · clinic staff can query Reports when enabled
+            </p>
+          </div>
+          <span
+            v-if="leadIntel"
+            class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+            :class="leadIntel.can_use
+              ? 'bg-emerald-50 text-emerald-700'
+              : 'bg-slate-100 text-slate-500'"
+          >
+            {{ leadIntel.can_use ? 'Ready' : 'Not linked' }}
+          </span>
+        </div>
+        <div class="space-y-3 p-4">
+          <label class="flex items-center gap-2 text-sm text-slate-700">
+            <input v-model="leadIntelForm.enabled" type="checkbox" class="rounded border-slate-300">
+            Enable Lead Intelligence for this clinic
+          </label>
+          <p v-if="leadIntel?.linked_user" class="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            Linked as
+            <strong>{{ leadIntel.linked_user.name || '—' }}</strong>
+            <span v-if="leadIntel.linked_user.email"> · {{ leadIntel.linked_user.email }}</span>
+          </p>
+          <label class="block text-xs font-medium text-slate-600">
+            Practice API token
+            <input
+              v-model="leadIntelForm.api_token"
+              type="password"
+              autocomplete="off"
+              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              :placeholder="leadIntel?.has_api_key
+                ? `Saved ${leadIntel.token_hint || 'token'} — paste to replace`
+                : 'Paste leads Practice API token'"
+            >
+          </label>
+          <label v-if="leadIntel?.has_api_key" class="flex items-center gap-2 text-xs text-slate-600">
+            <input v-model="leadIntelForm.clear_token" type="checkbox" class="rounded border-slate-300">
+            Clear saved token
+          </label>
+          <label class="block text-xs font-medium text-slate-600">
+            API base URL (optional)
+            <input
+              v-model="leadIntelForm.api_base_url"
+              type="url"
+              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              :placeholder="leadIntel?.default_api_base_url || 'https://leads.quantumdental.in/practice-api'"
+            >
+          </label>
+          <div class="flex flex-wrap gap-2 pt-1">
+            <UButton
+              size="sm"
+              class="bg-[#0097A7]"
+              :loading="savingLeadIntel"
+              @click="saveLeadIntel"
+            >
+              Save &amp; smoke test
+            </UButton>
+            <UButton
+              size="sm"
+              color="neutral"
+              variant="outline"
+              :loading="smokingLeadIntel"
+              :disabled="!leadIntel?.has_api_key"
+              @click="smokeLeadIntel"
+            >
+              Smoke test only
+            </UButton>
+          </div>
+        </div>
       </section>
 
       <!-- Letterhead + coming soon -->
