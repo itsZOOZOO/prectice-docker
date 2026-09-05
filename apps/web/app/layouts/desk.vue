@@ -263,7 +263,7 @@ useSeoMeta({ title: title })
 </script>
 
 <template>
-  <div class="relative flex h-full max-h-svh w-full max-w-full flex-col overflow-hidden">
+  <div class="relative flex h-full max-h-full w-full max-w-full flex-col overflow-hidden">
     <div
       class="desk-shell min-h-0 flex-1"
       :style="{ '--desk-aside-w': collapsed ? '68px' : '240px' }"
