@@ -67,7 +67,7 @@ onMounted(async () => {
 <template>
   <div class="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-10">
     <p class="text-4xl font-semibold text-[#0097A7]">
-      Prectice
+      Nav Dental
     </p>
     <p class="mt-6 text-slate-600">
       {{ error || status }}

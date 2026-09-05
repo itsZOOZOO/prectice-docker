@@ -1,4 +1,4 @@
-# plan-web (myplan.in)
+# plan-web (mypln.in)
 
 Patient-facing treatment plan viewer. Separate from desk (`apps/web`).
 
@@ -18,7 +18,7 @@ Open a share URL like `http://localhost:3001/{7code}/{slug}`.
 
 1. New project → same repo  
 2. **Root Directory:** `apps/plan-web`  
-3. Domain: `myplan.in`  
+3. Domain: `mypln.in` / `www.mypln.in`  
 4. Env: `NUXT_PUBLIC_API_BASE=https://api.dental.navapp.in/api`  
 
 Desk stays Root Directory `apps/web` → `dental.navapp.in`.

@@ -48,12 +48,25 @@ docker compose -f docker-compose.prod.yml --env-file .env.production up -d --bui
 
 ## Vercel
 
+### Desk (`dental.navapp.in`)
 - Root: `apps/web`
 - `NUXT_PUBLIC_API_BASE=https://api.dental.navapp.in/api`
 - Optional SSO overrides (defaults are fine for prod):
   - `NUXT_PUBLIC_SSO_AUTH_BASE_URL=https://auth.pratikp.com`
   - `NUXT_PUBLIC_SSO_APP_SLUG=navapp-dental`
   - `NUXT_PUBLIC_SSO_CALLBACK_URL=https://dental.navapp.in/sso/callback` (must match auth portal exactly)
+
+### Public plans (`mypln.in`)
+- Root: `apps/plan-web`
+- `NUXT_PUBLIC_API_BASE=https://api.dental.navapp.in/api`
+- On the **API** VPS `.env.production`, allow the plan origin and set the share base URL:
+
+```
+CORS_ORIGINS=https://dental.navapp.in,https://mypln.in,https://www.mypln.in
+PLAN_PUBLIC_BASE_URL=https://www.mypln.in
+```
+
+Then rebuild/restart the API container so CORS takes effect.
 
 ## SSO (API on VPS)
 

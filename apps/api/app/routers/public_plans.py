@@ -1,4 +1,4 @@
-"""Unauthenticated public treatment plan pages (myplan.in)."""
+"""Unauthenticated public treatment plan pages (mypln.in)."""
 
 from __future__ import annotations
 

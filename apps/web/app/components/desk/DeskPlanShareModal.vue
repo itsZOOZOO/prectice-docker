@@ -199,7 +199,7 @@ async function sendWhatsApp() {
           </UButton>
         </div>
         <p class="text-xs text-slate-500">
-          Copy links use <span class="font-medium">myplan.in</span>. WhatsApp still uses the Meta-approved template path until a new template is added.
+          Copy links use <span class="font-medium">mypln.in</span>. WhatsApp still uses the Meta-approved template path until a new template is added.
         </p>
 
         <p v-if="loading" class="text-sm text-slate-400">Loading…</p>
