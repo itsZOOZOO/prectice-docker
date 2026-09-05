@@ -5,7 +5,11 @@ import {
 } from '~/utils/sso'
 import { homePathForViewport } from '~/utils/deviceHome'
 
-definePageMeta({ layout: 'auth' })
+definePageMeta({
+  layout: 'auth',
+  // Auth portal often registers the legacy .php path
+  alias: ['/sso/callback.php']
+})
 
 const auth = useAuth()
 const { api } = useApi()
