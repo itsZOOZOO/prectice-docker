@@ -68,6 +68,18 @@ function formatDuration(seconds: number) {
   return s ? `${m}m ${s}s` : `${m}m`
 }
 
+/** Legacy-style OS label from User-Agent (same buckets as Next ShareTreatmentPlanSheet). */
+function shortUserAgent(ua: string | null | undefined) {
+  const value = (ua || '').trim()
+  if (!value) return 'Unknown device'
+  if (/iPhone|iPad/i.test(value)) return 'iOS'
+  if (/Android/i.test(value)) return 'Android'
+  if (/Macintosh|Mac OS/i.test(value)) return 'Mac'
+  if (/Windows/i.test(value)) return 'Windows'
+  if (/node/i.test(value)) return 'Server / bot'
+  return value.length > 42 ? `${value.slice(0, 42)}…` : value
+}
+
 async function refreshWa() {
   try {
     const s = await api<{ enabled?: boolean, wa_enabled?: boolean }>('/settings/whatsapp')
@@ -271,8 +283,15 @@ async function sendWhatsApp() {
                 :key="log.id"
                 class="rounded border border-slate-100 px-2 py-1.5"
               >
-                <div>{{ formatWhen(log.accessed_at) }} · {{ formatDuration(log.session_duration) }}</div>
-                <div class="text-slate-400">{{ log.ip_address || '—' }}</div>
+                <div class="flex items-start justify-between gap-2">
+                  <div class="min-w-0">
+                    <div>{{ formatWhen(log.accessed_at) }}</div>
+                    <div class="mt-0.5 truncate text-slate-400">
+                      {{ shortUserAgent(log.user_agent) }}<template v-if="log.ip_address"> · {{ log.ip_address }}</template>
+                    </div>
+                  </div>
+                  <div class="shrink-0 font-medium text-slate-600">{{ formatDuration(log.session_duration) }}</div>
+                </div>
               </li>
             </ul>
           </div>
