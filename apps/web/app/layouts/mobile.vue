@@ -79,6 +79,13 @@ onMounted(() => {
   void refreshActivityCount()
   document.addEventListener('mousedown', onDocPointer)
   document.addEventListener('touchstart', onDocPointer)
+  kickMobileScrollport()
+  requestAnimationFrame(() => {
+    kickMobileScrollport()
+    requestAnimationFrame(kickMobileScrollport)
+  })
+  window.setTimeout(kickMobileScrollport, 100)
+  window.setTimeout(kickMobileScrollport, 400)
 })
 onUnmounted(() => {
   document.removeEventListener('mousedown', onDocPointer)
@@ -96,10 +103,31 @@ const showBottomNav = computed(() => !route.path.startsWith('/clients/'))
 /** Clinic branding + Use desktop + bell + ⋮ — Patients home only. */
 const showShellHeader = computed(() => route.path === '/dashboard')
 provide('mobileRefreshBadges', refreshBadges)
+
+const shellRef = ref<HTMLElement | null>(null)
+
+/** Android: force scrollport metrics after mount / route (cold start bug). */
+function kickMobileScrollport() {
+  const el = shellRef.value
+  if (!el) return
+  void el.offsetHeight
+  const h = Math.round(window.visualViewport?.height ?? window.innerHeight)
+  if (h > 0) {
+    document.documentElement.style.setProperty('--app-height', `${h}px`)
+  }
+  window.dispatchEvent(new Event('resize'))
+}
+
+watch(() => route.fullPath, () => {
+  nextTick(() => {
+    kickMobileScrollport()
+    requestAnimationFrame(kickMobileScrollport)
+  })
+})
 </script>
 
 <template>
-  <div class="mobile-shell mx-auto max-w-[480px]">
+  <div ref="shellRef" class="mobile-shell mx-auto max-w-[480px]">
     <header
       v-if="showShellHeader"
       class="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-3"
