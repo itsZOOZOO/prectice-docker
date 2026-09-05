@@ -92,7 +92,15 @@ python scripts/apply_indexes.py
 
 **Yes — another agent can deploy this with Docker** if the VPS has Docker + Compose, a domain pointing at the VPS, and ports 80/443 open. Compose file is ready; empty DB boots, then import data.
 
-### 1) On the VPS
+### Vercel frontend + VPS API (trial)
+
+See **[docs/deploy-vercel-vps.md](docs/deploy-vercel-vps.md)**.
+
+- **Do not** spin up a second Docker stack.
+- Same compose: add `CADDY_API_DOMAIN=api.dental.navapp.in`, CORS for `*.vercel.app`, deploy Nuxt from `apps/web` on Vercel with `NUXT_PUBLIC_API_BASE=https://api.dental.navapp.in/api`.
+- Keep `dental.navapp.in` as full Docker UI for rollback.
+
+### 1) On the VPS (all-in-one Docker)
 
 ```bash
 # clone/copy this repo onto the VPS

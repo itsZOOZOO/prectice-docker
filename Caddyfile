@@ -5,6 +5,7 @@
 {$CADDY_DOMAIN} {
 	encode gzip
 
+	# Existing all-in-one host (rollback UI + API under same origin)
 	handle /api* {
 		reverse_proxy api:8000
 	}
@@ -19,5 +20,27 @@
 
 	handle {
 		reverse_proxy web:3000
+	}
+}
+
+# API-only host for Vercel frontend (set CADDY_API_DOMAIN=api.dental.navapp.in)
+{$CADDY_API_DOMAIN} {
+	encode gzip
+
+	handle /api* {
+		reverse_proxy api:8000
+	}
+
+	handle /docs* {
+		reverse_proxy api:8000
+	}
+
+	handle /openapi.json {
+		reverse_proxy api:8000
+	}
+
+	# Bare host → OpenAPI docs (no Nuxt here)
+	handle {
+		redir /docs permanent
 	}
 }

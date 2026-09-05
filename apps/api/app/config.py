@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me"
     jwt_expire_hours: int = 72
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    # Optional regex for preview hosts (e.g. https://.*\.vercel\.app$)
+    cors_origin_regex: str = ""
 
     # Legacy Quantum Dental S3 — set via apps/api/.env (never commit keys)
     aws_access_key_id: str = ""
@@ -34,6 +36,11 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def cors_origin_regex_value(self) -> str | None:
+        raw = (self.cors_origin_regex or "").strip()
+        return raw or None
 
     @property
     def s3_configured(self) -> bool:

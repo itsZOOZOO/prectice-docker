@@ -16,6 +16,11 @@ export default defineNuxtConfig({
     }
   },
 
+  // Vercel sets VERCEL=1 during builds; local/Docker keep default Nitro node preset.
+  nitro: {
+    ...(process.env.VERCEL ? { preset: 'vercel' as const } : {})
+  },
+
   colorMode: {
     preference: 'light'
   },
