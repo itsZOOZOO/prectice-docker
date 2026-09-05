@@ -10,12 +10,15 @@ import urllib.request
 from datetime import date, time as time_of_day
 from typing import Any
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models import Client, ClientPhone, ClinicSetting
 
 DEFAULT_WA_API_URL = "https://wa.aarogyams.com/api.php"
+DEFAULT_INBOX_API_URL = "https://wa.aarogyams.com/api_inbox.php"
 DISABLED_MESSAGE = "WhatsApp messaging is not enabled for this clinic."
+INBOX_DISABLED_MESSAGE = "WhatsApp Inbox is not enabled for this clinic."
 PRESCRIPTION_WA_TTL = 7 * 24 * 3600  # 7 days
 
 
@@ -30,23 +33,6 @@ def get_setting(db: Session, clinic_id: int, key: str, default: str = "") -> str
     return default
 
 
-def whatsapp_status(db: Session, clinic_id: int) -> dict[str, bool | str | None]:
-    wa_enabled = get_setting(db, clinic_id, "wa_enabled", "0") == "1"
-    key = get_setting(db, clinic_id, "wa_api_key", "")
-    url = get_setting(db, clinic_id, "wa_api_url", "") or DEFAULT_WA_API_URL
-    has_key = bool(key)
-    preview = None
-    if has_key:
-        preview = ("…" + key[-4:]) if len(key) > 4 else "••••"
-    return {
-        "enabled": wa_enabled and has_key,
-        "wa_enabled": wa_enabled,
-        "has_api_key": has_key,
-        "api_key_preview": preview,
-        "wa_api_url": url,
-    }
-
-
 def upsert_setting(db: Session, clinic_id: int, key: str, value: str | None) -> None:
     row = (
         db.query(ClinicSetting)
@@ -59,6 +45,82 @@ def upsert_setting(db: Session, clinic_id: int, key: str, value: str | None) -> 
         db.add(ClinicSetting(clinic_id=clinic_id, setting_key=key, setting_value=value))
 
 
+def api_url(db: Session, clinic_id: int) -> str:
+    url = get_setting(db, clinic_id, "wa_api_url", "")
+    return url or DEFAULT_WA_API_URL
+
+
+def api_key(db: Session, clinic_id: int) -> str:
+    return get_setting(db, clinic_id, "wa_api_key", "")
+
+
+def is_wa_flag_enabled(db: Session, clinic_id: int) -> bool:
+    return get_setting(db, clinic_id, "wa_enabled", "0") == "1"
+
+
+def has_api_key(db: Session, clinic_id: int) -> bool:
+    return bool(api_key(db, clinic_id))
+
+
+def is_inbox_enabled(db: Session, clinic_id: int) -> bool:
+    return get_setting(db, clinic_id, "wa_inbox_enabled", "0") == "1"
+
+
+def can_use_inbox(db: Session, clinic_id: int) -> bool:
+    return is_inbox_enabled(db, clinic_id) and has_api_key(db, clinic_id)
+
+
+def inbox_api_url(db: Session, clinic_id: int) -> str:
+    explicit = get_setting(db, clinic_id, "wa_inbox_api_url", "")
+    if explicit:
+        return explicit
+    send_url = api_url(db, clinic_id)
+    if send_url.endswith("api.php"):
+        return send_url[: -len("api.php")] + "api_inbox.php"
+    return DEFAULT_INBOX_API_URL
+
+
+def whatsapp_status(db: Session, clinic_id: int) -> dict[str, Any]:
+    wa_enabled = is_wa_flag_enabled(db, clinic_id)
+    key = api_key(db, clinic_id)
+    has_key = bool(key)
+    preview = None
+    if has_key:
+        preview = ("…" + key[-4:]) if len(key) > 4 else "••••"
+    inbox_on = is_inbox_enabled(db, clinic_id)
+    return {
+        "enabled": wa_enabled and has_key,
+        "wa_enabled": wa_enabled,
+        "has_api_key": has_key,
+        "api_key_preview": preview,
+        "wa_api_url": api_url(db, clinic_id),
+        "inbox_enabled": inbox_on,
+        "can_use_inbox": inbox_on and has_key,
+        "can_manage": False,  # superadmin-only via /admin
+    }
+
+
+def admin_status(db: Session, clinic_id: int) -> dict[str, Any]:
+    key = api_key(db, clinic_id)
+    inbox_on = is_inbox_enabled(db, clinic_id)
+    return {
+        "wa_enabled": is_wa_flag_enabled(db, clinic_id),
+        "inbox_enabled": inbox_on,
+        "has_api_key": bool(key),
+        "token_hint": f"…{key[-4:]}" if len(key) >= 4 else (key if key else None),
+        "wa_api_url": api_url(db, clinic_id),
+        "wa_inbox_api_url": get_setting(db, clinic_id, "wa_inbox_api_url", "") or inbox_api_url(db, clinic_id),
+        "default_wa_api_url": DEFAULT_WA_API_URL,
+        "default_inbox_api_url": DEFAULT_INBOX_API_URL,
+        "enabled": is_wa_flag_enabled(db, clinic_id) and bool(key),
+        "can_use_inbox": inbox_on and bool(key),
+    }
+
+
+def is_enabled(db: Session, clinic_id: int) -> bool:
+    return bool(whatsapp_status(db, clinic_id)["enabled"])
+
+
 def update_whatsapp_settings(
     db: Session,
     clinic_id: int,
@@ -67,7 +129,8 @@ def update_whatsapp_settings(
     wa_api_key: str | None = None,
     wa_api_url: str | None = None,
     clear_api_key: bool = False,
-) -> dict[str, bool | str | None]:
+) -> dict[str, Any]:
+    """Legacy desk PATCH — prefer admin save_admin_config."""
     if wa_enabled is not None:
         upsert_setting(db, clinic_id, "wa_enabled", "1" if wa_enabled else "0")
     if clear_api_key:
@@ -81,20 +144,6 @@ def update_whatsapp_settings(
         upsert_setting(db, clinic_id, "wa_api_url", trimmed_url or DEFAULT_WA_API_URL)
     db.commit()
     return whatsapp_status(db, clinic_id)
-
-
-def is_enabled(db: Session, clinic_id: int) -> bool:
-    return bool(whatsapp_status(db, clinic_id)["enabled"])
-
-
-def api_url(db: Session, clinic_id: int) -> str:
-    url = get_setting(db, clinic_id, "wa_api_url", "")
-    return url or DEFAULT_WA_API_URL
-
-
-def api_key(db: Session, clinic_id: int) -> str:
-    return get_setting(db, clinic_id, "wa_api_key", "")
-
 
 def resolve_phone(
     *,
@@ -366,7 +415,8 @@ def send_warranty_card(
         f"{product_name} ({units} units)" if product_name else f"{units} units"
     )
     period = f"{int(card.warranty_period or 0)} days"
-    pdf_name = f"Warranty Card - {re.sub(r'[/\\\\:*?\"<>|]+', '', client_name).strip() or 'Patient'}.pdf"
+    safe_client = re.sub(r'[/\\:*?"<>|]+', '', client_name).strip() or "Patient"
+    pdf_name = f"Warranty Card - {safe_client}.pdf"
 
     try:
         pdf_bytes = generate_warranty_card_pdf(db, clinic_id, card_id)
@@ -454,3 +504,212 @@ def _post_template(db: Session, clinic_id: int, payload: dict[str, Any]) -> dict
         return {"success": False, "message": f"WhatsApp HTTP {e.code}: {raw[:200]}", "response": None}
     except Exception as e:  # noqa: BLE001 — surface to desk toast
         return {"success": False, "message": f"WhatsApp error: {e}", "response": None}
+
+
+def assert_can_use_inbox(db: Session, clinic_id: int) -> None:
+    if not can_use_inbox(db, clinic_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=INBOX_DISABLED_MESSAGE,
+        )
+
+
+def _inbox_http(
+    *,
+    method: str,
+    base_url: str,
+    api_key_value: str,
+    action: str,
+    query: dict[str, str] | None = None,
+    body: dict[str, Any] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    key = (api_key_value or "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=INBOX_DISABLED_MESSAGE,
+        )
+    base = (base_url or DEFAULT_INBOX_API_URL).strip()
+    headers = {
+        "X-Api-Key": key,
+        "Accept": "application/json",
+    }
+
+    if method.upper() == "GET":
+        from urllib.parse import urlencode
+
+        params = {"action": action}
+        if query:
+            params.update({k: v for k, v in query.items() if v is not None and v != ""})
+        url = f"{base}?{urlencode(params)}"
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        data_bytes = None
+    else:
+        payload = dict(body or {})
+        payload["action"] = action
+        data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(base, data=data_bytes, headers=headers, method="POST")
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            http_code = getattr(resp, "status", 200) or 200
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", errors="replace")
+        http_code = e.code
+    except urllib.error.URLError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Inbox API unreachable: {e.reason}",
+        ) from e
+
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        parsed = {"success": False, "error": "Invalid JSON from Inbox API", "raw": raw[:300]}
+
+    if not isinstance(parsed, dict):
+        parsed = {"success": False, "error": "Invalid response from Inbox API"}
+
+    return int(http_code), parsed
+
+
+def smoke_test(
+    db: Session,
+    clinic_id: int,
+    *,
+    api_key_value: str | None = None,
+    inbox_url: str | None = None,
+) -> dict[str, Any]:
+    use_key = (api_key_value if api_key_value is not None else api_key(db, clinic_id)).strip()
+    use_url = (inbox_url if inbox_url is not None else inbox_api_url(db, clinic_id)).strip()
+    if not use_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="API key is required for smoke test.",
+        )
+    http_code, payload = _inbox_http(
+        method="GET",
+        base_url=use_url or DEFAULT_INBOX_API_URL,
+        api_key_value=use_key,
+        action="list_tags",
+    )
+    if http_code >= 400 or not payload.get("success", True):
+        err = payload.get("error") if isinstance(payload.get("error"), str) else None
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED
+            if http_code in (401, 403)
+            else status.HTTP_502_BAD_GATEWAY,
+            detail=err or f"Inbox smoke test failed (HTTP {http_code}).",
+        )
+    tags = payload.get("tags") if isinstance(payload.get("tags"), list) else []
+    return {"ok": True, "tags_count": len(tags)}
+
+
+def save_admin_config(
+    db: Session,
+    clinic_id: int,
+    *,
+    wa_enabled: bool | None = None,
+    inbox_enabled: bool | None = None,
+    api_token: str | None = None,
+    clear_token: bool = False,
+    wa_api_url: str | None = None,
+    wa_inbox_api_url: str | None = None,
+    run_smoke_test: bool = True,
+) -> dict[str, Any]:
+    next_key = api_key(db, clinic_id)
+    if clear_token:
+        next_key = ""
+    elif api_token is not None and api_token.strip():
+        next_key = api_token.strip()
+
+    next_inbox_on = is_inbox_enabled(db, clinic_id) if inbox_enabled is None else bool(inbox_enabled)
+
+    next_inbox_url = inbox_api_url(db, clinic_id)
+    if wa_inbox_api_url is not None:
+        trimmed = wa_inbox_api_url.strip()
+        next_inbox_url = trimmed or DEFAULT_INBOX_API_URL
+
+    smoke: dict[str, Any] | None = None
+    if run_smoke_test and next_inbox_on and next_key:
+        smoke = smoke_test(
+            db,
+            clinic_id,
+            api_key_value=next_key,
+            inbox_url=next_inbox_url,
+        )
+
+    if wa_enabled is not None:
+        upsert_setting(db, clinic_id, "wa_enabled", "1" if wa_enabled else "0")
+    if inbox_enabled is not None:
+        upsert_setting(db, clinic_id, "wa_inbox_enabled", "1" if inbox_enabled else "0")
+
+    if clear_token:
+        upsert_setting(db, clinic_id, "wa_api_key", "")
+    elif api_token is not None and api_token.strip():
+        upsert_setting(db, clinic_id, "wa_api_key", api_token.strip())
+
+    if wa_api_url is not None:
+        trimmed = wa_api_url.strip()
+        if not trimmed or trimmed == DEFAULT_WA_API_URL:
+            upsert_setting(db, clinic_id, "wa_api_url", None)
+        else:
+            upsert_setting(db, clinic_id, "wa_api_url", trimmed)
+
+    if wa_inbox_api_url is not None:
+        trimmed = wa_inbox_api_url.strip()
+        # Clear explicit override when empty or default-derived
+        if not trimmed:
+            upsert_setting(db, clinic_id, "wa_inbox_api_url", None)
+        else:
+            upsert_setting(db, clinic_id, "wa_inbox_api_url", trimmed)
+
+    db.commit()
+    out = admin_status(db, clinic_id)
+    if smoke is not None:
+        out["smoke_test"] = smoke
+    return out
+
+
+def proxy_inbox(
+    db: Session,
+    clinic_id: int,
+    *,
+    method: str,
+    action: str,
+    query: dict[str, str] | None = None,
+    body: dict[str, Any] | None = None,
+    created_by: str | None = None,
+) -> dict[str, Any]:
+    assert_can_use_inbox(db, clinic_id)
+    action = (action or "").strip()
+    if not action:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing action",
+        )
+
+    payload = dict(body or {}) if method.upper() == "POST" else None
+    if payload is not None and action == "schedule_message" and created_by:
+        payload.setdefault("created_by", created_by)
+
+    http_code, parsed = _inbox_http(
+        method=method,
+        base_url=inbox_api_url(db, clinic_id),
+        api_key_value=api_key(db, clinic_id),
+        action=action,
+        query=query,
+        body=payload,
+    )
+
+    if http_code >= 500:
+        err = parsed.get("error") if isinstance(parsed.get("error"), str) else None
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=err or f"Inbox API error (HTTP {http_code})",
+        )
+
+    # Pass through wa.aarogyams.com shape (success / error / …)
+    return parsed

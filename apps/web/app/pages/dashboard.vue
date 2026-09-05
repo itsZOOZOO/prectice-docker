@@ -233,7 +233,7 @@ const tabCount = computed(() => 2 + dashboardFilters.value.length)
       </div>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-y-auto px-3 py-3 pb-24">
+    <div class="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-3 py-3 pb-24 [-webkit-overflow-scrolling:touch]">
       <p v-if="loading" class="py-10 text-center text-sm text-slate-400">Loading…</p>
       <ul v-else class="space-y-2">
         <li v-for="c in list" :key="c.client_id">

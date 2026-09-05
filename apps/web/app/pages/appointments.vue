@@ -544,7 +544,7 @@ function shouldShowNowAtEnd(section: DaySection): boolean {
 
     <div
       ref="scrollEl"
-      class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 pb-24"
+      class="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-4 py-3 pb-24 [-webkit-overflow-scrolling:touch]"
       @scroll.passive="onAgendaScroll"
     >
       <p v-if="loading" class="py-12 text-center text-sm text-slate-400">Loading appointments…</p>

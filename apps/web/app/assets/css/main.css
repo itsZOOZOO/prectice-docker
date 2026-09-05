@@ -37,6 +37,14 @@ body {
   color: var(--desk-ink);
 }
 
+/* Layout roots must fill the app shell so nested overflow-y-auto can scroll.
+   Only the first two levels under #__nuxt (UApp + page wrapper) — not deep descendants. */
+#__nuxt > * {
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+}
+
 /* Desk shell: never stack main under sidebar (Tailwind flex can lose to UApp/layout wrappers) */
 .desk-shell {
   display: grid !important;
@@ -44,7 +52,7 @@ body {
   grid-template-rows: 100%;
   width: 100%;
   max-width: 100vw;
-  height: 100svh;
+  height: 100%;
   max-height: 100svh;
   overflow: hidden;
   background: var(--desk-bg);
@@ -75,6 +83,43 @@ body {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.desk-shell__content > * {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  max-height: 100%;
+}
+
+/* Mobile shell: lock viewport; page roots fill main; pages scroll inside */
+.mobile-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  max-height: 100svh;
+  overflow: hidden;
+  background: var(--desk-bg);
+  color: var(--desk-ink);
+}
+
+.mobile-shell > main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mobile-shell > main > * {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
 }
 
 /* Attention pulse for mismatched mobile/desktop view (finite; driven by JS). */

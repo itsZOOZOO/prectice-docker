@@ -31,6 +31,7 @@ from app.routers import (
     tasks,
     treatment_plans,
     warranty_cards,
+    wa_inbox,
 )
 
 settings_cfg = get_settings()
@@ -68,6 +69,7 @@ app.include_router(call_intelligence.router, prefix="/api")
 app.include_router(call_intelligence.status_router, prefix="/api")
 app.include_router(lead_intelligence.router, prefix="/api")
 app.include_router(lead_intelligence.status_router, prefix="/api")
+app.include_router(wa_inbox.router, prefix="/api")
 app.include_router(labs.router, prefix="/api")
 app.include_router(treatment_plans.router, prefix="/api")
 app.include_router(warranty_cards.router, prefix="/api")

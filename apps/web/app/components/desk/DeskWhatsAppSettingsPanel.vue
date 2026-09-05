@@ -5,71 +5,27 @@ type WaSettings = {
   has_api_key: boolean
   api_key_preview: string | null
   wa_api_url: string
+  inbox_enabled: boolean
+  can_use_inbox: boolean
+  can_manage: boolean
 }
 
 const { api } = useApi()
-const toast = useToast()
 
 const loading = ref(true)
-const saving = ref(false)
 const error = ref('')
-const form = reactive({
-  wa_enabled: false,
-  wa_api_url: 'https://wa.aarogyams.com/api.php',
-  wa_api_key: '',
-  has_api_key: false,
-  api_key_preview: null as string | null,
-  replace_key: false
-})
+const status = ref<WaSettings | null>(null)
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const data = await api<WaSettings>('/settings/whatsapp')
-    form.wa_enabled = data.wa_enabled
-    form.wa_api_url = data.wa_api_url || 'https://wa.aarogyams.com/api.php'
-    form.has_api_key = data.has_api_key
-    form.api_key_preview = data.api_key_preview
-    form.wa_api_key = ''
-    form.replace_key = !data.has_api_key
+    status.value = await api<WaSettings>('/settings/whatsapp')
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Failed to load settings'
+    status.value = null
   } finally {
     loading.value = false
-  }
-}
-
-async function save() {
-  saving.value = true
-  try {
-    const body: Record<string, unknown> = {
-      wa_enabled: form.wa_enabled,
-      wa_api_url: form.wa_api_url.trim() || null
-    }
-    if (form.replace_key) {
-      if (form.wa_api_key.trim()) {
-        body.wa_api_key = form.wa_api_key.trim()
-      } else if (form.has_api_key) {
-        body.clear_api_key = true
-      }
-    }
-    const data = await api<WaSettings>('/settings/whatsapp', { method: 'PATCH', body })
-    form.wa_enabled = data.wa_enabled
-    form.wa_api_url = data.wa_api_url || form.wa_api_url
-    form.has_api_key = data.has_api_key
-    form.api_key_preview = data.api_key_preview
-    form.wa_api_key = ''
-    form.replace_key = !data.has_api_key
-    toast.add({
-      title: data.enabled ? 'WhatsApp ready' : 'WhatsApp settings saved',
-      description: data.enabled ? 'Confirmations can be sent from Book' : 'Enable + API key required to send',
-      color: data.enabled ? 'success' : 'warning'
-    })
-  } catch (e: unknown) {
-    toast.add({ title: e instanceof Error ? e.message : 'Save failed', color: 'error' })
-  } finally {
-    saving.value = false
   }
 }
 
@@ -83,81 +39,54 @@ onMounted(() => {
     <p v-if="error" class="mb-4 text-sm text-red-600">{{ error }}</p>
     <p v-else-if="loading" class="text-sm text-slate-400">Loading…</p>
 
-    <form
-      v-else
+    <div
+      v-else-if="status"
       class="mx-auto max-w-xl space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
-      @submit.prevent="save"
     >
-      <div class="flex items-start justify-between gap-3">
-        <div>
-          <p class="text-sm font-medium text-[#1C2B35]">Enable messaging</p>
-          <p class="mt-0.5 text-xs text-slate-500">Send appointment confirmations from Book</p>
-        </div>
-        <label class="inline-flex cursor-pointer items-center gap-2 text-sm">
-          <input v-model="form.wa_enabled" type="checkbox" class="h-4 w-4 accent-[#0097A7]">
-          <span>{{ form.wa_enabled ? 'Enabled' : 'Disabled' }}</span>
-        </label>
-      </div>
-
-      <UFormField label="API URL">
-        <UInput v-model="form.wa_api_url" class="w-full" placeholder="https://wa.aarogyams.com/api.php" />
-      </UFormField>
-
-      <div class="space-y-2">
-        <div class="flex items-center justify-between gap-2">
-          <p class="text-sm font-medium text-[#1C2B35]">API key</p>
-          <button
-            v-if="form.has_api_key && !form.replace_key"
-            type="button"
-            class="text-xs font-medium text-[#0097A7] hover:underline"
-            @click="form.replace_key = true"
-          >
-            Replace key
-          </button>
-        </div>
-        <p
-          v-if="form.has_api_key && !form.replace_key"
-          class="rounded-lg bg-slate-50 px-3 py-2 font-mono text-sm text-slate-600"
-        >
-          Key saved {{ form.api_key_preview }}
+      <div>
+        <p class="text-sm font-medium text-[#1C2B35]">WhatsApp status</p>
+        <p class="mt-0.5 text-xs text-slate-500">
+          Managed by a superadmin. Ask them to enable messaging or Inbox on the clinic admin page.
         </p>
-        <template v-else>
-          <UInput
-            v-model="form.wa_api_key"
-            type="password"
-            class="w-full"
-            autocomplete="off"
-            :placeholder="form.has_api_key ? 'Paste new key (leave blank to clear)' : 'Paste clinic API key'"
-          />
-          <button
-            v-if="form.has_api_key"
-            type="button"
-            class="text-xs text-slate-500 hover:text-slate-700"
-            @click="form.replace_key = false; form.wa_api_key = ''"
-          >
-            Cancel replace
-          </button>
-        </template>
       </div>
 
-      <div
-        class="rounded-lg px-3 py-2 text-xs"
-        :class="form.wa_enabled && (form.has_api_key || form.wa_api_key.trim())
-          ? 'bg-emerald-50 text-emerald-800'
-          : 'bg-amber-50 text-amber-800'"
-      >
-        <template v-if="form.wa_enabled && (form.has_api_key || form.wa_api_key.trim())">
-          Ready — Book confirm will show the WhatsApp checkbox.
-        </template>
-        <template v-else>
-          Turn on messaging and save an API key to send confirmations.
-        </template>
+      <div class="grid gap-3 sm:grid-cols-2">
+        <div
+          class="rounded-lg px-3 py-2 text-xs"
+          :class="status.enabled ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-50 text-slate-600'"
+        >
+          <p class="font-semibold uppercase tracking-wide">Outbound</p>
+          <p class="mt-1">
+            {{ status.enabled ? 'Ready — Book / Rx / warranty can send' : 'Not ready' }}
+          </p>
+        </div>
+        <div
+          class="rounded-lg px-3 py-2 text-xs"
+          :class="status.can_use_inbox ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-50 text-slate-600'"
+        >
+          <p class="font-semibold uppercase tracking-wide">Inbox</p>
+          <p class="mt-1">
+            {{ status.can_use_inbox ? 'Ready — Inbox nav is available' : 'Not enabled' }}
+          </p>
+        </div>
       </div>
 
-      <div class="flex justify-end gap-2 pt-1">
-        <UButton color="neutral" variant="ghost" type="button" @click="load">Reset</UButton>
-        <UButton type="submit" class="bg-[#0097A7]" :loading="saving">Save</UButton>
-      </div>
-    </form>
+      <dl class="space-y-2 text-sm text-slate-600">
+        <div class="flex justify-between gap-3">
+          <dt class="text-slate-500">Messaging flag</dt>
+          <dd>{{ status.wa_enabled ? 'On' : 'Off' }}</dd>
+        </div>
+        <div class="flex justify-between gap-3">
+          <dt class="text-slate-500">Inbox flag</dt>
+          <dd>{{ status.inbox_enabled ? 'On' : 'Off' }}</dd>
+        </div>
+        <div class="flex justify-between gap-3">
+          <dt class="text-slate-500">API key</dt>
+          <dd class="font-mono text-xs">
+            {{ status.has_api_key ? `Saved ${status.api_key_preview || ''}` : 'Not set' }}
+          </dd>
+        </div>
+      </dl>
+    </div>
   </div>
 </template>

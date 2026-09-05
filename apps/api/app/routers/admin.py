@@ -682,3 +682,64 @@ def smoke_test_lead_intelligence(
 
     _require_clinic(db, clinic_id)
     return OkResponse(data=li.smoke_test(db, clinic_id))
+
+
+# --- Integrations (WhatsApp) ------------------------------------------------
+
+
+class WhatsAppIntegrationUpdateBody(BaseModel):
+    wa_enabled: bool | None = None
+    inbox_enabled: bool | None = None
+    api_token: str | None = None
+    clear_token: bool = False
+    wa_api_url: str | None = None
+    wa_inbox_api_url: str | None = None
+    run_smoke_test: bool = True
+
+
+@router.get("/clinics/{clinic_id}/integrations/whatsapp", response_model=OkResponse)
+def get_whatsapp_integration(
+    clinic_id: int,
+    _: Annotated[User, Depends(require_superadmin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import whatsapp as wa
+
+    _require_clinic(db, clinic_id)
+    return OkResponse(data=wa.admin_status(db, clinic_id))
+
+
+@router.patch("/clinics/{clinic_id}/integrations/whatsapp", response_model=OkResponse)
+def update_whatsapp_integration(
+    clinic_id: int,
+    body: WhatsAppIntegrationUpdateBody,
+    _: Annotated[User, Depends(require_superadmin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import whatsapp as wa
+
+    _require_clinic(db, clinic_id)
+    data = wa.save_admin_config(
+        db,
+        clinic_id,
+        wa_enabled=body.wa_enabled,
+        inbox_enabled=body.inbox_enabled,
+        api_token=body.api_token,
+        clear_token=body.clear_token,
+        wa_api_url=body.wa_api_url,
+        wa_inbox_api_url=body.wa_inbox_api_url,
+        run_smoke_test=body.run_smoke_test,
+    )
+    return OkResponse(data=data)
+
+
+@router.post("/clinics/{clinic_id}/integrations/whatsapp/smoke-test", response_model=OkResponse)
+def smoke_test_whatsapp_integration(
+    clinic_id: int,
+    _: Annotated[User, Depends(require_superadmin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import whatsapp as wa
+
+    _require_clinic(db, clinic_id)
+    return OkResponse(data=wa.smoke_test(db, clinic_id))

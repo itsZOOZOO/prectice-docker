@@ -231,7 +231,7 @@ onMounted(load)
       </div>
     </div>
 
-    <div class="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 pb-24">
+    <div class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain px-4 py-4 pb-24 [-webkit-overflow-scrolling:touch]">
       <p v-if="loading" class="py-16 text-center text-sm text-slate-400">Loading tasks…</p>
       <template v-else>
         <button

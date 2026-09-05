@@ -53,7 +53,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-full min-h-0 overflow-y-auto px-4 py-4">
+  <div class="h-full min-h-0 overflow-y-auto overscroll-y-contain px-4 py-4 [-webkit-overflow-scrolling:touch]">
     <div class="mb-4">
       <h1 class="text-lg font-semibold text-[#1C2B35]">Settings</h1>
       <p class="text-xs text-slate-500">Account & preferences</p>

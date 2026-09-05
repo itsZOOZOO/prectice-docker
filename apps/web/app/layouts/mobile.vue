@@ -99,7 +99,7 @@ provide('mobileRefreshBadges', refreshBadges)
 </script>
 
 <template>
-  <div class="mobile-shell mx-auto flex h-svh max-w-[480px] flex-col bg-[#F0F4F8]">
+  <div class="mobile-shell mx-auto max-w-[480px]">
     <header
       v-if="showShellHeader"
       class="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-3"
@@ -168,7 +168,7 @@ provide('mobileRefreshBadges', refreshBadges)
     </header>
 
     <main
-      class="min-h-0 flex-1 overflow-hidden"
+      class="min-h-0 flex-1"
       :class="showBottomNav ? 'pb-20' : ''"
     >
       <slot />

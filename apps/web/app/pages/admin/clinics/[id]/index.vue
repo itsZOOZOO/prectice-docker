@@ -66,7 +66,6 @@ const roles = [
 const comingSoon = [
   { title: 'Medicine templates', desc: 'Prescription medicine catalog', icon: 'i-lucide-pill' },
   { title: 'Treatment plans', desc: 'Treatment catalog & pricing', icon: 'i-lucide-stethoscope' },
-  { title: 'WhatsApp', desc: 'API key, enable / disable messaging', icon: 'i-lucide-message-circle' },
   { title: 'WA message templates', desc: 'Appointment, prescription & other defaults', icon: 'i-lucide-mail' }
 ]
 
@@ -229,6 +228,112 @@ async function smokeLeadIntel() {
   }
 }
 
+type WaAdmin = {
+  wa_enabled: boolean
+  inbox_enabled: boolean
+  has_api_key: boolean
+  token_hint: string | null
+  wa_api_url: string
+  wa_inbox_api_url: string
+  default_wa_api_url: string
+  default_inbox_api_url: string
+  enabled: boolean
+  can_use_inbox: boolean
+  smoke_test?: { ok: boolean, tags_count: number }
+}
+
+const waAdmin = ref<WaAdmin | null>(null)
+const waForm = reactive({
+  wa_enabled: false,
+  inbox_enabled: false,
+  api_token: '',
+  wa_api_url: '',
+  wa_inbox_api_url: '',
+  clear_token: false
+})
+const savingWa = ref(false)
+const smokingWa = ref(false)
+
+async function loadWa() {
+  if (!Number.isFinite(clinicId.value) || clinicId.value <= 0) return
+  try {
+    waAdmin.value = await api<WaAdmin>(
+      `/admin/clinics/${clinicId.value}/integrations/whatsapp`
+    )
+    waForm.wa_enabled = waAdmin.value.wa_enabled
+    waForm.inbox_enabled = waAdmin.value.inbox_enabled
+    waForm.api_token = ''
+    waForm.clear_token = false
+    waForm.wa_api_url =
+      waAdmin.value.wa_api_url === waAdmin.value.default_wa_api_url
+        ? ''
+        : waAdmin.value.wa_api_url
+    const derivedInbox = waAdmin.value.wa_api_url.endsWith('api.php')
+      ? `${waAdmin.value.wa_api_url.slice(0, -'api.php'.length)}api_inbox.php`
+      : waAdmin.value.default_inbox_api_url
+    waForm.wa_inbox_api_url =
+      waAdmin.value.wa_inbox_api_url === derivedInbox
+        || waAdmin.value.wa_inbox_api_url === waAdmin.value.default_inbox_api_url
+        ? ''
+        : waAdmin.value.wa_inbox_api_url
+  } catch {
+    waAdmin.value = null
+  }
+}
+
+async function saveWa() {
+  savingWa.value = true
+  try {
+    waAdmin.value = await api<WaAdmin>(
+      `/admin/clinics/${clinicId.value}/integrations/whatsapp`,
+      {
+        method: 'PATCH',
+        body: {
+          wa_enabled: waForm.wa_enabled,
+          inbox_enabled: waForm.inbox_enabled,
+          api_token: waForm.api_token.trim() || null,
+          clear_token: waForm.clear_token,
+          wa_api_url: waForm.wa_api_url.trim() || null,
+          wa_inbox_api_url: waForm.wa_inbox_api_url.trim() || null,
+          run_smoke_test: true
+        }
+      }
+    )
+    waForm.api_token = ''
+    waForm.clear_token = false
+    const tags = waAdmin.value.smoke_test?.tags_count
+    toast.add({
+      title: tags != null
+        ? `WhatsApp saved · inbox smoke OK (${tags} tags)`
+        : 'WhatsApp saved',
+      color: 'success'
+    })
+    await loadWa()
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Save failed', color: 'error' })
+  } finally {
+    savingWa.value = false
+  }
+}
+
+async function smokeWa() {
+  smokingWa.value = true
+  try {
+    const data = await api<{ ok: boolean, tags_count: number }>(
+      `/admin/clinics/${clinicId.value}/integrations/whatsapp/smoke-test`,
+      { method: 'POST' }
+    )
+    toast.add({
+      title: `Inbox smoke OK · ${data.tags_count} tags`,
+      color: 'success'
+    })
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Smoke test failed', color: 'error' })
+  } finally {
+    smokingWa.value = false
+  }
+}
+
 async function load() {
   if (!Number.isFinite(clinicId.value) || clinicId.value <= 0) return
   loading.value = true
@@ -241,6 +346,7 @@ async function load() {
     users.value = u
     void loadCallIntel()
     void loadLeadIntel()
+    void loadWa()
   } catch (e: unknown) {
     toast.add({ title: e instanceof Error ? e.message : 'Failed to load', color: 'error' })
   } finally {
@@ -595,6 +701,93 @@ watch(clinicId, load, { immediate: true })
               @click="smokeLeadIntel"
             >
               Smoke test only
+            </UButton>
+          </div>
+        </div>
+      </section>
+
+      <!-- WhatsApp -->
+      <section class="overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+          <div>
+            <h3 class="text-sm font-semibold text-[#1C2B35]">WhatsApp</h3>
+            <p class="text-xs text-slate-500">
+              Shared API key · outbound messaging + Inbox (desk nav when inbox ready)
+            </p>
+          </div>
+          <span
+            v-if="waAdmin"
+            class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+            :class="waAdmin.can_use_inbox
+              ? 'bg-emerald-50 text-emerald-700'
+              : waAdmin.enabled
+                ? 'bg-sky-50 text-sky-700'
+                : 'bg-slate-100 text-slate-500'"
+          >
+            {{ waAdmin.can_use_inbox ? 'Inbox ready' : waAdmin.enabled ? 'Send ready' : 'Not linked' }}
+          </span>
+        </div>
+        <div class="space-y-3 p-4">
+          <label class="flex items-center gap-2 text-sm text-slate-700">
+            <input v-model="waForm.wa_enabled" type="checkbox" class="rounded border-slate-300">
+            Enable outbound messaging (Book confirm, Rx, warranty…)
+          </label>
+          <label class="flex items-center gap-2 text-sm text-slate-700">
+            <input v-model="waForm.inbox_enabled" type="checkbox" class="rounded border-slate-300">
+            Enable WhatsApp Inbox for this clinic
+          </label>
+          <label class="block text-xs font-medium text-slate-600">
+            API key
+            <input
+              v-model="waForm.api_token"
+              type="password"
+              autocomplete="off"
+              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              :placeholder="waAdmin?.has_api_key
+                ? `Saved ${waAdmin.token_hint || 'key'} — paste to replace`
+                : 'Paste clinic WhatsApp API key'"
+            >
+          </label>
+          <label v-if="waAdmin?.has_api_key" class="flex items-center gap-2 text-xs text-slate-600">
+            <input v-model="waForm.clear_token" type="checkbox" class="rounded border-slate-300">
+            Clear saved key
+          </label>
+          <label class="block text-xs font-medium text-slate-600">
+            Send API URL (optional)
+            <input
+              v-model="waForm.wa_api_url"
+              type="url"
+              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              :placeholder="waAdmin?.default_wa_api_url || 'https://wa.aarogyams.com/api.php'"
+            >
+          </label>
+          <label class="block text-xs font-medium text-slate-600">
+            Inbox API URL (optional)
+            <input
+              v-model="waForm.wa_inbox_api_url"
+              type="url"
+              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              :placeholder="waAdmin?.default_inbox_api_url || 'https://wa.aarogyams.com/api_inbox.php'"
+            >
+          </label>
+          <div class="flex flex-wrap gap-2 pt-1">
+            <UButton
+              size="sm"
+              class="bg-[#0097A7]"
+              :loading="savingWa"
+              @click="saveWa"
+            >
+              Save &amp; smoke test
+            </UButton>
+            <UButton
+              size="sm"
+              color="neutral"
+              variant="outline"
+              :loading="smokingWa"
+              :disabled="!waAdmin?.has_api_key"
+              @click="smokeWa"
+            >
+              Inbox smoke only
             </UButton>
           </div>
         </div>

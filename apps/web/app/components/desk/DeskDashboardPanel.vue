@@ -146,7 +146,7 @@ function openCollect(c: ClientRow) {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col overflow-hidden p-5">
+  <div class="flex h-full min-h-0 flex-col overflow-y-auto overscroll-y-contain p-5 [-webkit-overflow-scrolling:touch]">
     <div class="mb-4 grid shrink-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <div class="rounded-xl border border-slate-200 bg-white p-4">
         <p class="text-xs text-slate-500">Checked in</p>

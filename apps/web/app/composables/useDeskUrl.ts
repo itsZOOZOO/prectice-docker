@@ -1,4 +1,13 @@
-export type DeskView = 'dashboard' | 'patients' | 'calendar' | 'tasks' | 'lab' | 'statistics' | 'settings'
+export type DeskView =
+  | 'dashboard'
+  | 'patients'
+  | 'calendar'
+  | 'tasks'
+  | 'lab'
+  | 'wa-inbox'
+  | 'statistics'
+  | 'settings'
+
 export type CalMode = 'day' | 'month'
 export type LabFilter =
   | 'action_needed'
@@ -37,6 +46,7 @@ const VIEW_TITLES: Record<DeskView, string> = {
   calendar: 'Calendar',
   tasks: 'Tasks',
   lab: 'Lab',
+  'wa-inbox': 'WhatsApp Inbox',
   statistics: 'Reports',
   settings: 'Settings'
 }
@@ -96,6 +106,7 @@ export function useDeskUrl() {
       || v === 'dashboard'
       || v === 'settings'
       || v === 'statistics'
+      || v === 'wa-inbox'
     ) {
       return v
     }

@@ -50,19 +50,50 @@ const searchTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
 const clinicInitial = computed(() => String(clinicName.value || 'P').charAt(0))
 
-const nav = [
+const canUseWaInbox = ref(false)
+const waInboxGateReady = ref(false)
+
+const baseNav = [
   { key: 'dashboard' as const, label: 'Dashboard', icon: '▦', locked: false },
   { key: 'patients' as const, label: 'Patients', icon: '👥', locked: false },
   { key: 'calendar' as const, label: 'Calendar', icon: '📅', locked: false },
   { key: 'lab' as const, label: 'Lab', icon: '🦷', locked: false },
-  { key: 'tasks' as const, label: 'Tasks', icon: '📋', locked: false },
+  { key: 'tasks' as const, label: 'Tasks', icon: '📋', locked: false }
+]
+const waInboxNav = { key: 'wa-inbox' as const, label: 'WhatsApp Inbox', icon: '💬', locked: false }
+const trailingNav = [
   { key: 'statistics' as const, label: 'Reports', icon: '📊', locked: true },
   { key: 'settings' as const, label: 'Settings', icon: '⚙', locked: false }
 ]
 
-function onNavClick(key: typeof nav[number]['key']) {
+const nav = computed(() => {
+  if (canUseWaInbox.value) {
+    return [...baseNav, waInboxNav, ...trailingNav]
+  }
+  return [...baseNav, ...trailingNav]
+})
+
+async function refreshWaInboxGate() {
+  try {
+    const st = await api<{ can_use_inbox?: boolean }>('/settings/whatsapp')
+    canUseWaInbox.value = Boolean(st.can_use_inbox)
+  } catch {
+    canUseWaInbox.value = false
+  } finally {
+    waInboxGateReady.value = true
+  }
+  if (view.value === 'wa-inbox' && !canUseWaInbox.value) {
+    void setView('dashboard')
+  }
+}
+
+function onNavClick(key: (typeof baseNav)[number]['key'] | 'wa-inbox' | 'statistics' | 'settings') {
   if (key === 'statistics' && reportsLocked.value) {
     reportsUnlockOpen.value = true
+    return
+  }
+  if (key === 'wa-inbox' && !canUseWaInbox.value) {
+    void setView('dashboard')
     return
   }
   void setView(key)
@@ -77,6 +108,9 @@ watch(view, (v) => {
   if (v === 'statistics' && reportsLocked.value) {
     reportsUnlockOpen.value = true
   }
+  if (v === 'wa-inbox' && !canUseWaInbox.value) {
+    void refreshWaInboxGate()
+  }
 })
 
 onMounted(() => {
@@ -86,6 +120,7 @@ onMounted(() => {
   refreshBadges()
   void refreshMe()
   void refreshActivityCount()
+  void refreshWaInboxGate()
   hydrateFromStorage()
   void fetchStatus().catch(() => { /* ignore */ }).then(() => {
     if (view.value === 'statistics' && reportsLocked.value) {
@@ -221,14 +256,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 provide('deskRefreshBadges', refreshBadges)
 provide('deskOpenBook', openHeaderBook)
 provide('deskOpenAddPatient', () => { addOpen.value = true })
+provide('deskCanUseWaInbox', canUseWaInbox)
+provide('deskWaInboxGateReady', waInboxGateReady)
 
 useSeoMeta({ title: title })
 </script>
 
 <template>
-  <div class="relative h-svh max-h-svh w-full max-w-full overflow-hidden">
+  <div class="relative flex h-full max-h-svh w-full max-w-full flex-col overflow-hidden">
     <div
-      class="desk-shell"
+      class="desk-shell min-h-0 flex-1"
       :style="{ '--desk-aside-w': collapsed ? '68px' : '240px' }"
     >
       <aside class="desk-shell__aside">

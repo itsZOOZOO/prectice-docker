@@ -71,7 +71,7 @@ onMounted(load)
       </span>
     </header>
 
-    <main class="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 pb-24">
+    <main class="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-y-contain px-4 py-4 pb-24 [-webkit-overflow-scrolling:touch]">
       <div
         v-if="loading"
         class="flex items-center justify-center gap-2 py-16 text-sm text-slate-400"
