@@ -353,6 +353,7 @@ class Task(Base):
     clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.client_id"), index=True)
     task_description: Mapped[str] = mapped_column(Text, nullable=False)
+    attachment_url: Mapped[str | None] = mapped_column(String(512))
     due_date: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(20), default="Open", nullable=False, index=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
@@ -360,6 +361,23 @@ class Task(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    notes: Mapped[list[TaskNote]] = relationship(
+        back_populates="task", cascade="all, delete-orphan", order_by="TaskNote.created_at.desc()"
+    )
+
+
+class TaskNote(Base):
+    __tablename__ = "task_notes"
+
+    note_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.task_id"), nullable=False, index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    note_text: Mapped[str] = mapped_column(Text, nullable=False)
+    attachment_url: Mapped[str | None] = mapped_column(String(512))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    task: Mapped[Task] = relationship(back_populates="notes")
 
 
 class DentalLab(Base):
@@ -446,6 +464,11 @@ class Treatment(Base):
     price_options: Mapped[list[PriceOption]] = relationship(
         back_populates="treatment", cascade="all, delete-orphan"
     )
+    photos: Mapped[list[TreatmentPhoto]] = relationship(
+        back_populates="treatment",
+        cascade="all, delete-orphan",
+        order_by="TreatmentPhoto.sort_order.asc(), TreatmentPhoto.photo_id.asc()",
+    )
 
 
 class PriceOption(Base):
@@ -459,6 +482,36 @@ class PriceOption(Base):
     is_foc: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     treatment: Mapped[Treatment] = relationship(back_populates="price_options")
+    photos: Mapped[list[PriceOptionPhoto]] = relationship(
+        back_populates="price_option",
+        cascade="all, delete-orphan",
+        order_by="PriceOptionPhoto.photo_id.asc()",
+    )
+
+
+class TreatmentPhoto(Base):
+    __tablename__ = "treatment_photos"
+
+    photo_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    treatment_id: Mapped[int] = mapped_column(
+        ForeignKey("treatments.treatment_id"), nullable=False, index=True
+    )
+    photo_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    treatment: Mapped[Treatment] = relationship(back_populates="photos")
+
+
+class PriceOptionPhoto(Base):
+    __tablename__ = "price_option_photos"
+
+    photo_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    price_option_id: Mapped[int] = mapped_column(
+        ForeignKey("price_options.price_option_id"), nullable=False, index=True
+    )
+    photo_url: Mapped[str] = mapped_column(String(512), nullable=False)
+
+    price_option: Mapped[PriceOption] = relationship(back_populates="photos")
 
 
 class TreatmentPlan(Base):
@@ -588,4 +641,6 @@ class CardIssued(Base):
     warranty_period: Mapped[int] = mapped_column(Integer, nullable=False)
     visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    # Null on imported legacy rows — timeline falls back to date_of_purchase noon.
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

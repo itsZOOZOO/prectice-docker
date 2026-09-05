@@ -101,6 +101,69 @@ def list_catalog(db: Session, clinic_id: int) -> list[dict[str, Any]]:
     return [{"treatment_id": t.treatment_id, "name": t.name} for t in rows]
 
 
+def list_catalog_browse(db: Session, clinic_id: int) -> list[dict[str, Any]]:
+    """Rich catalog for mobile Treats tab (parity with PHP listCatalogBrowse)."""
+    treatments = (
+        db.query(Treatment)
+        .options(
+            joinedload(Treatment.photos),
+            joinedload(Treatment.price_options).joinedload(PriceOption.photos),
+        )
+        .filter(Treatment.clinic_id == clinic_id, Treatment.active.is_(True))
+        .order_by(Treatment.sort_order.asc(), Treatment.name.asc())
+        .all()
+    )
+    out: list[dict[str, Any]] = []
+    for t in treatments:
+        treatment_photos = [
+            url
+            for ph in sorted(t.photos, key=lambda p: (p.sort_order, p.photo_id))
+            if (url := media_svc.resolve_media_key(ph.photo_url))
+        ]
+        price_options_raw = sorted(
+            t.price_options,
+            key=lambda p: (float(p.price or 0), p.price_option_id),
+        )
+        price_options: list[dict[str, Any]] = []
+        all_photos = list(treatment_photos)
+        prices: list[float] = []
+        for po in price_options_raw:
+            option_photos = [
+                url
+                for ph in sorted(po.photos, key=lambda p: p.photo_id)
+                if (url := media_svc.resolve_media_key(ph.photo_url))
+            ]
+            all_photos.extend(option_photos)
+            prices.append(float(po.price or 0))
+            price_options.append(
+                {
+                    "id": po.price_option_id,
+                    "label": po.label,
+                    "price": float(po.price or 0),
+                    "explainer": po.explainer,
+                    "is_foc": bool(po.is_foc),
+                    "photos": option_photos,
+                }
+            )
+        price_count = len(price_options)
+        out.append(
+            {
+                "id": t.treatment_id,
+                "name": t.name,
+                "short_explainer": t.short_explainer,
+                "default_appts": int(t.default_appts or 0),
+                "photos": treatment_photos,
+                "all_photos": all_photos,
+                "photo_count": len(all_photos),
+                "price_options": price_options,
+                "price_count": price_count,
+                "min_price": min(prices) if price_count else None,
+                "max_price": max(prices) if price_count else None,
+            }
+        )
+    return out
+
+
 def list_price_options(db: Session, clinic_id: int, treatment_id: int) -> list[dict[str, Any]]:
     t = (
         db.query(Treatment)

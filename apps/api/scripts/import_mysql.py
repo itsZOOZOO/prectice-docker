@@ -51,6 +51,7 @@ from app.models import (
     Prescription,
     PrescriptionItem,
     Task,
+    TaskNote,
     User,
 )
 
@@ -137,6 +138,7 @@ def _reset_sequences(db) -> None:
         ("prescriptions", "prescription_id"),
         ("prescription_items", "item_id"),
         ("tasks", "task_id"),
+        ("task_notes", "note_id"),
         ("dental_labs", "lab_id"),
         ("lab_cases", "case_id"),
         ("lab_case_cycles", "cycle_id"),
@@ -174,12 +176,18 @@ def _wipe_clinic(db, clinic_id: int) -> None:
         AppointmentService,
         AppointmentStatus,
         MedicineTemplate,
-        Task,
         ClinicSetting,
         Client,
         User,
         Clinic,
     ]
+    task_ids = [
+        r[0]
+        for r in db.query(Task.task_id).filter(Task.clinic_id == clinic_id).all()
+    ]
+    if task_ids:
+        db.query(TaskNote).filter(TaskNote.task_id.in_(task_ids)).delete(synchronize_session=False)
+        db.query(Task).filter(Task.task_id.in_(task_ids)).delete(synchronize_session=False)
     for model in tables:
         if model is Clinic:
             db.query(model).filter(model.clinic_id == clinic_id).delete(synchronize_session=False)
@@ -627,7 +635,9 @@ def import_clinic(*, clinic_id: int, replace: bool, dry_run: bool, keep_admin: b
             if not dry_run:
                 for t in tasks:
                     st = t.get("status") or "Open"
-                    if st not in {"Open", "Completed", "Cancelled"}:
+                    if str(st).lower() in {"pending", "open"}:
+                        st = "Open"
+                    elif st not in {"Open", "Completed", "Cancelled"}:
                         st = "Completed" if str(st).lower() == "completed" else "Open"
                     db.merge(
                         Task(
@@ -635,6 +645,7 @@ def import_clinic(*, clinic_id: int, replace: bool, dry_run: bool, keep_admin: b
                             clinic_id=clinic_id,
                             client_id=t.get("client_id"),
                             task_description=(t.get("task_description") or "Task").strip(),
+                            attachment_url=t.get("attachment_url"),
                             due_date=t.get("due_date"),
                             status=st,
                             created_by=t.get("created_by"),
@@ -657,6 +668,28 @@ def import_clinic(*, clinic_id: int, replace: bool, dry_run: bool, keep_admin: b
                         task = db.get(Task, row["task_id"])
                         if task and task.assignee_id is None:
                             task.assignee_id = row["user_id"]
+
+                    # task notes
+                    try:
+                        cur.execute(
+                            f"SELECT * FROM task_notes WHERE task_id IN ({fmt}) ORDER BY note_id",
+                            task_ids,
+                        )
+                        notes = cur.fetchall()
+                    except Exception:
+                        notes = []
+                    stats["task_notes"] = len(notes)
+                    for n in notes:
+                        db.merge(
+                            TaskNote(
+                                note_id=n["note_id"],
+                                task_id=n["task_id"],
+                                user_id=n.get("user_id"),
+                                note_text=(n.get("note_text") or "").strip() or "Note",
+                                attachment_url=n.get("attachment_url"),
+                                created_at=n.get("created_at") or datetime.now(timezone.utc),
+                            )
+                        )
 
             # Dental labs + cases + cycles
             try:

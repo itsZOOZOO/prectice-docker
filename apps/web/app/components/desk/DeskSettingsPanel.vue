@@ -146,6 +146,7 @@ async function saveLab() {
 }
 
 async function archiveLab(lab: DentalLab) {
+  if (!window.confirm(`Archive lab “${lab.name}”? This cannot be undone.`)) return
   try {
     await api(`/labs/${lab.lab_id}`, { method: 'DELETE' })
     toast.add({ title: 'Lab archived', color: 'success' })

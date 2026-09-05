@@ -9,8 +9,8 @@ const mismatchAttention = useViewMismatchAttention(isDesktop)
 const desktopSwitchClass = computed(() => viewSwitchClass(isDesktop.value, mismatchAttention.value))
 const desktopSwitchTitle = computed(() =>
   isDesktop.value
-    ? 'Large screen detected — switch to Desktop App'
-    : 'Open Desktop App'
+    ? 'Large screen — use desktop'
+    : 'Use desktop'
 )
 
 const badges = ref({ open_tasks: 0, lab_action_needed: 0, appointments_today: 0 })
@@ -21,6 +21,7 @@ const tabs = [
   { to: '/dashboard', label: 'Patients', icon: 'i-lucide-users', match: ['/dashboard', '/clients'] },
   { to: '/appointments', label: 'Appts', icon: 'i-lucide-calendar', match: ['/appointments'] },
   { to: '/tasks', label: 'Tasks', icon: 'i-lucide-check-square', match: ['/tasks'] },
+  { to: '/treatments', label: 'Treats', icon: 'i-lucide-stethoscope', match: ['/treatments'] },
   { to: '/lab', label: 'Lab', icon: 'i-lucide-flask-conical', match: ['/lab'] }
 ]
 
@@ -64,7 +65,8 @@ onUnmounted(() => {
 watch(() => route.path, () => { moreOpen.value = false })
 
 const showBottomNav = computed(() => !route.path.startsWith('/clients/'))
-const showShellHeader = computed(() => !route.path.startsWith('/clients/'))
+/** Clinic branding + Use desktop + ⋮ — Patients home only. */
+const showShellHeader = computed(() => route.path === '/dashboard')
 provide('mobileRefreshBadges', refreshBadges)
 </script>
 
@@ -87,7 +89,7 @@ provide('mobileRefreshBadges', refreshBadges)
           :class="desktopSwitchClass"
         >
           <span aria-hidden>🖥</span>
-          <span>Desktop App</span>
+          <span>Use desktop</span>
         </NuxtLink>
         <div ref="moreMenuRef" class="relative">
           <button
@@ -132,7 +134,7 @@ provide('mobileRefreshBadges', refreshBadges)
       class="fixed bottom-0 left-1/2 z-40 w-full max-w-[480px] -translate-x-1/2 border-t border-slate-200 bg-white/95 backdrop-blur"
       style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom))"
     >
-      <ul class="grid grid-cols-4 gap-1 px-2 pt-2">
+      <ul class="grid grid-cols-5 gap-0.5 px-1 pt-2">
         <li v-for="tab in tabs" :key="tab.to">
           <NuxtLink
             :to="tab.to"

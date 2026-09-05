@@ -11,8 +11,8 @@ const mismatchAttention = useViewMismatchAttention(preferMobileView)
 const mobileSwitchClass = computed(() => viewSwitchClass(preferMobileView.value, mismatchAttention.value))
 const mobileSwitchTitle = computed(() =>
   preferMobileView.value
-    ? 'Narrow screen detected — switch to Mobile App'
-    : 'Switch to Mobile App'
+    ? 'Narrow screen — use mobile'
+    : 'Use mobile'
 )
 
 const isAdminRoute = computed(() => route.path.startsWith('/admin'))
@@ -170,7 +170,7 @@ useSeoMeta({ title: title })
           <div class="flex items-start gap-2" :class="collapsed ? 'flex-col items-center' : 'justify-between'">
             <div v-if="!collapsed" class="min-w-0 flex-1">
               <p class="truncate text-[11px] uppercase tracking-wider text-slate-400">{{ clinicName }}</p>
-              <p class="text-base font-semibold text-[#1C2B35]">Desktop App</p>
+              <p class="text-base font-semibold text-[#1C2B35]">Desk</p>
             </div>
             <p v-else class="truncate text-center text-[11px] font-semibold uppercase tracking-wide text-slate-400">
               {{ clinicInitial }}
@@ -236,7 +236,7 @@ useSeoMeta({ title: title })
             ]"
           >
             <span aria-hidden>{{ collapsed ? '📱' : '←' }}</span>
-            <span v-if="!collapsed">Mobile App</span>
+            <span v-if="!collapsed">Use mobile</span>
           </NuxtLink>
           <button
             type="button"

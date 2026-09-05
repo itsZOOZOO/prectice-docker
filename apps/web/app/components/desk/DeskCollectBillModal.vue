@@ -31,8 +31,6 @@ const receiptDatetime = ref('')
 const showDatetime = ref(false)
 const saving = ref(false)
 
-const modeItems = computed(() => PAYMENT_MODES.map(m => ({ label: m, value: m })))
-
 function localDatetimeInputValue() {
   const d = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -40,7 +38,7 @@ function localDatetimeInputValue() {
 }
 
 function reset() {
-  amount.value = props.amountDue > 0 ? String(props.amountDue) : ''
+  amount.value = ''
   paymentMode.value = 'Cash'
   description.value = ''
   receiptDatetime.value = localDatetimeInputValue()
@@ -78,15 +76,6 @@ async function save() {
     saving.value = false
   }
 }
-
-const balanceHint = computed(() => {
-  const total = props.billTotal ?? props.amountDue
-  const paid = props.totalPaid ?? 0
-  if (paid > 0 && total > paid) {
-    return `Bill ₹${total.toLocaleString('en-IN')} · Paid ₹${paid.toLocaleString('en-IN')} · Due ₹${Math.max(0, total - paid).toLocaleString('en-IN')}`
-  }
-  return null
-})
 </script>
 
 <template>
@@ -94,20 +83,26 @@ const balanceHint = computed(() => {
     <template #body>
       <form class="space-y-3" @submit.prevent="save">
         <p v-if="clientName" class="text-sm text-slate-600">{{ clientName }}</p>
-        <p v-if="balanceHint" class="text-xs text-slate-500">{{ balanceHint }}</p>
 
         <UFormField label="Amount" required>
-          <UInput v-model="amount" type="number" min="0.01" step="0.01" class="w-full" autofocus />
+          <UInput v-model="amount" type="number" min="0.01" step="0.01" class="w-full" placeholder="Type amount" autofocus />
         </UFormField>
 
         <UFormField label="Payment mode" required>
-          <USelect
-            v-model="paymentMode"
-            :items="modeItems"
-            value-key="value"
-            label-key="label"
-            class="w-full"
-          />
+          <div class="flex flex-wrap gap-2">
+            <button
+              v-for="m in PAYMENT_MODES"
+              :key="m"
+              type="button"
+              class="rounded-full px-3 py-1.5 text-xs font-semibold transition"
+              :class="paymentMode === m
+                ? 'bg-[#0097A7] text-white'
+                : 'bg-slate-100 text-slate-700 ring-1 ring-slate-200 hover:bg-slate-200'"
+              @click="paymentMode = m"
+            >
+              {{ m }}
+            </button>
+          </div>
         </UFormField>
 
         <UFormField label="Description">

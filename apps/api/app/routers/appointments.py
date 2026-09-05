@@ -5,12 +5,13 @@ from typing import Annotated
 import re
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.db import get_db
 from app import media as media_svc
+from app import reporting_notify as reporting
 from app.models import (
     Appointment,
     AppointmentDoctor,
@@ -62,14 +63,30 @@ def _enrich_many(db: Session, rows: list[Appointment]) -> list[dict]:
     doctor_ids = {r.doctor_id for r in rows}
     service_ids = {r.service_id for r in rows if r.service_id}
     doctors = {
-        d.doctor_id: d.doctor_name
+        d.doctor_id: (d.doctor_name, d.color_code)
         for d in db.query(AppointmentDoctor).filter(AppointmentDoctor.doctor_id.in_(doctor_ids)).all()
     } if doctor_ids else {}
     services = {
-        s.service_id: s.service_name
+        s.service_id: (s.service_name, int(s.duration_minutes or 30))
         for s in db.query(AppointmentService).filter(AppointmentService.service_id.in_(service_ids)).all()
     } if service_ids else {}
-    return [_serialize(r, doctors.get(r.doctor_id), services.get(r.service_id) if r.service_id else None) for r in rows]
+    out: list[dict] = []
+    for r in rows:
+        doc = doctors.get(r.doctor_id)
+        svc = services.get(r.service_id) if r.service_id else None
+        row = _serialize(r, doc[0] if doc else None, svc[0] if svc else None)
+        row["doctor_color"] = (doc[1] if doc else None) or "#0097A7"
+        if svc:
+            row["duration_minutes"] = svc[1]
+        elif r.end_time and r.appointment_time:
+            start_m = r.appointment_time.hour * 60 + r.appointment_time.minute
+            end_m = r.end_time.hour * 60 + r.end_time.minute
+            delta = end_m - start_m
+            row["duration_minutes"] = delta if delta > 0 else 30
+        else:
+            row["duration_minutes"] = 30
+        out.append(row)
+    return out
 
 
 @router.get("/meta", response_model=OkResponse)
@@ -337,6 +354,7 @@ def list_slots(
 @router.post("", response_model=OkResponse, status_code=status.HTTP_201_CREATED)
 def create_appointment(
     body: AppointmentCreate,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> OkResponse:
@@ -416,6 +434,17 @@ def create_appointment(
     db.add(appt)
     db.commit()
     db.refresh(appt)
+
+    background_tasks.add_task(
+        reporting.send_app_notification,
+        reporting.format_booked(
+            appt.name,
+            doctor.doctor_name,
+            appt.appointment_date,
+            appt.appointment_time,
+            service_name,
+        ),
+    )
 
     data = _serialize(appt, doctor.doctor_name, service_name)
     data["whatsapp_sent"] = False
@@ -522,6 +551,7 @@ def get_appointment(
 def update_appointment(
     appointment_id: int,
     body: AppointmentUpdate,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> OkResponse:
@@ -590,6 +620,17 @@ def update_appointment(
     db.commit()
     db.refresh(appt)
 
+    background_tasks.add_task(
+        reporting.send_app_notification,
+        reporting.format_changed(
+            appt.name,
+            doctor.doctor_name,
+            appt.appointment_date,
+            appt.appointment_time,
+            service_name,
+        ),
+    )
+
     data = _serialize(appt, doctor.doctor_name, service_name)
     data["whatsapp_sent"] = False
     data["whatsapp_message"] = "WhatsApp not requested"
@@ -622,12 +663,37 @@ def update_appointment(
 @router.delete("/{appointment_id}", response_model=OkResponse)
 def delete_appointment(
     appointment_id: int,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> OkResponse:
     appt = _get_clinic_appointment(db, user.clinic_id, appointment_id)
+    doctor = (
+        db.query(AppointmentDoctor)
+        .filter(AppointmentDoctor.doctor_id == appt.doctor_id)
+        .first()
+    )
+    service_name = None
+    if appt.service_id:
+        service = (
+            db.query(AppointmentService)
+            .filter(AppointmentService.service_id == appt.service_id)
+            .first()
+        )
+        if service:
+            service_name = service.service_name
+
+    cancel_msg = reporting.format_cancelled(
+        appt.name,
+        doctor.doctor_name if doctor else None,
+        appt.appointment_date,
+        appt.appointment_time,
+        service_name,
+    )
+
     db.delete(appt)
     db.commit()
+    background_tasks.add_task(reporting.send_app_notification, cancel_msg)
     return OkResponse(data={"message": "Appointment deleted", "appointment_id": appointment_id})
 
 
@@ -716,6 +782,7 @@ def send_missed_reminder(
 def update_status(
     appointment_id: int,
     body: AppointmentStatusUpdate,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> OkResponse:
@@ -736,7 +803,39 @@ def update_status(
     if body.status not in allowed:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status")
 
+    old_status = appt.status
     appt.status = body.status
     db.commit()
     db.refresh(appt)
+
+    if (
+        body.status != old_status
+        and body.status in reporting.ACTIONABLE_STATUSES
+    ):
+        doctor = (
+            db.query(AppointmentDoctor)
+            .filter(AppointmentDoctor.doctor_id == appt.doctor_id)
+            .first()
+        )
+        service_name = None
+        if appt.service_id:
+            service = (
+                db.query(AppointmentService)
+                .filter(AppointmentService.service_id == appt.service_id)
+                .first()
+            )
+            if service:
+                service_name = service.service_name
+        background_tasks.add_task(
+            reporting.send_app_notification,
+            reporting.format_status(
+                body.status,
+                appt.name,
+                doctor.doctor_name if doctor else None,
+                appt.appointment_date,
+                appt.appointment_time,
+                service_name,
+            ),
+        )
+
     return OkResponse(data=_enrich_many(db, [appt])[0])

@@ -51,7 +51,7 @@ onMounted(load)
         <p class="mt-1 text-3xl font-semibold text-[#1C2B35]">₹{{ Number(summary?.receipts_today_total || 0).toLocaleString('en-IN') }}</p>
       </div>
       <div class="rounded-xl border border-slate-200 bg-white p-4">
-        <p class="text-xs text-slate-500">Open tasks</p>
+        <p class="text-xs text-slate-500">Tasks due today</p>
         <p class="mt-1 text-3xl font-semibold text-[#1C2B35]">{{ summary?.open_tasks ?? '—' }}</p>
       </div>
     </div>

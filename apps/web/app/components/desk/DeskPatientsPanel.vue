@@ -27,6 +27,7 @@ type TimelineItem = {
   billStatus?: string
   billAmountDue?: number
   billTotalPaid?: number
+  billLinkedReceipts?: number
   receiptId?: number
   kind: 'note' | 'bill' | 'receipt' | 'rx' | 'appointment' | 'task' | 'lab' | 'plan' | 'warranty'
   title: string
@@ -176,8 +177,8 @@ const noteDatetimeCustomized = ref(false)
 const toggling = ref(false)
 const bookOpen = ref(false)
 const editAppointmentId = ref<number | null>(null)
-const expandedApptId = ref<number | null>(null)
-const apptActionBusy = ref(false)
+const detailOpen = ref(false)
+const detailAppointmentId = ref<number | null>(null)
 const waEnabled = ref(false)
 /** Mobile chart: timeline (default) vs lite profile (name/photo tap). */
 const mobileView = ref<'timeline' | 'profile'>('timeline')
@@ -328,14 +329,14 @@ async function loadChart(id: number) {
     const [c, notes, bills, receipts, rxs, appts, tasks, labs, plans, cards] = await Promise.all([
       api<Client>(`/clients/${id}`),
       api<{ note_id: number, body: string, created_at: string, author_name: string | null, attachments?: NoteAttachment[] }[]>(`/clients/${id}/notes`),
-      api<{ bill_id: number, amount_due: number, status: string, description: string | null, issued_at: string, total_paid?: number }[]>(`/clients/${id}/bills`),
+      api<{ bill_id: number, amount_due: number, status: string, description: string | null, issued_at: string, total_paid?: number, linked_receipt_count?: number }[]>(`/clients/${id}/bills`),
       api<{ receipt_id: number, amount: number, payment_mode: string, description: string | null, received_at: string, bill_id?: number | null }[]>(`/clients/${id}/receipts`),
-      api<{ prescription_id: number, prescription_date: string, notes: string | null, items: { medicine_name: string }[] }[]>(`/clients/${id}/prescriptions`),
+      api<{ prescription_id: number, prescription_date: string, notes: string | null, created_at?: string, items: { medicine_name: string }[] }[]>(`/clients/${id}/prescriptions`),
       api<{ items: { appointment_id: number, appointment_date: string, appointment_time: string, status: string, doctor_name: string | null, service_name: string | null }[] }>('/appointments', { query: { client_id: id, limit: 50 } }),
       api<{ items: { task_id: number, task_description: string, status: string, due_date: string | null, created_at: string }[] }>('/tasks', { query: { client_id: id } }),
       api<{ cases: { case_id: number, case_ref: string, case_type: string | null, lab_name: string, stage: string, status: string, created_at: string, expected_return_date: string | null }[] }>(`/clients/${id}/lab-cases`),
       api<{ plan_id: number, title: string, summary: string | null, total_cost: number | null, locked_at: string | null, created_at: string, photos: { url: string | null }[] }[]>(`/clients/${id}/treatment-plans`),
-      api<{ card_id: number, type_name: string, unique_code: string, warranty_period: number, date_of_purchase: string, product_name: string, number_of_units: number }[]>(`/clients/${id}/warranty-cards`)
+      api<{ card_id: number, type_name: string, unique_code: string, warranty_period: number, date_of_purchase: string, product_name: string, number_of_units: number, created_at?: string | null }[]>(`/clients/${id}/warranty-cards`)
     ])
     client.value = c
     const totalBilling = bills.reduce((sum, b) => sum + Number(b.amount_due || 0), 0)
@@ -366,7 +367,7 @@ async function loadChart(id: number) {
       const balance = Math.max(0, due - paid)
       const bodyParts = [
         b.description || null,
-        status === 'partial' ? `Paid ₹${paid.toLocaleString('en-IN')} · Due ₹${balance.toLocaleString('en-IN')}` : null
+        `Paid ₹${paid.toLocaleString('en-IN')} · Due ₹${balance.toLocaleString('en-IN')}`
       ].filter(Boolean)
       items.push({
         id: `bill-${b.bill_id}`,
@@ -374,6 +375,7 @@ async function loadChart(id: number) {
         billStatus: status,
         billAmountDue: due,
         billTotalPaid: paid,
+        billLinkedReceipts: Number(b.linked_receipt_count ?? 0),
         kind: 'bill',
         title: `Bill · ₹${due.toLocaleString('en-IN')} · ${formatBillStatus(status)}`,
         body: bodyParts.join(' · ') || undefined,
@@ -397,7 +399,7 @@ async function loadChart(id: number) {
         kind: 'rx',
         title: `Rx · ${rx.items.map(i => i.medicine_name).join(', ') || 'Prescription'}`,
         body: rx.notes || undefined,
-        at: `${rx.prescription_date}T12:00:00`
+        at: rx.created_at || `${rx.prescription_date}T12:00:00`
       })
     }
     for (const a of appts.items) {
@@ -463,7 +465,8 @@ async function loadChart(id: number) {
         body: [card.unique_code, card.product_name, card.warranty_period ? `${card.warranty_period} days` : null]
           .filter(Boolean)
           .join(' · ') || undefined,
-        at: `${card.date_of_purchase}T12:00:00`
+        // Real create time when present; imported rows fall back to purchase date at noon.
+        at: card.created_at || `${card.date_of_purchase}T12:00:00`
       })
     }
     timeline.value = items.sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
@@ -643,6 +646,7 @@ async function onPickPhoto(ev: Event) {
 
 async function removeAttachment(item: TimelineItem, att: NoteAttachment) {
   if (!client.value || !item.noteId || att.id == null) return
+  if (!window.confirm('Delete this attachment? This cannot be undone.')) return
   const key = `${item.noteId}-${att.id}`
   removingAttach.value = key
   try {
@@ -650,9 +654,9 @@ async function removeAttachment(item: TimelineItem, att: NoteAttachment) {
       method: 'DELETE'
     })
     await loadChart(client.value.client_id)
-    toast.add({ title: 'Attachment removed', color: 'success' })
+    toast.add({ title: 'Attachment deleted', color: 'success' })
   } catch (e: unknown) {
-    toast.add({ title: e instanceof Error ? e.message : 'Remove failed', color: 'error' })
+    toast.add({ title: e instanceof Error ? e.message : 'Delete failed', color: 'error' })
   } finally {
     removingAttach.value = null
   }
@@ -674,7 +678,7 @@ function openNoteEdit(item: TimelineItem) {
 
 async function deleteNote(item: TimelineItem) {
   if (!client.value || !item.noteId || deletingNoteId.value) return
-  if (!window.confirm('Delete this note?')) return
+  if (!window.confirm('Delete this note? This cannot be undone.')) return
   deletingNoteId.value = item.noteId
   try {
     await api(`/clients/${client.value.client_id}/notes/${item.noteId}`, { method: 'DELETE' })
@@ -691,7 +695,7 @@ async function deleteNote(item: TimelineItem) {
 function kindColor(kind: TimelineItem['kind']) {
   const map: Record<TimelineItem['kind'], string> = {
     note: 'border-l-[#0097A7]',
-    bill: 'border-l-amber-500',
+    bill: 'border-l-orange-500',
     receipt: 'border-l-emerald-500',
     rx: 'border-l-violet-500',
     appointment: 'border-l-sky-500',
@@ -703,26 +707,23 @@ function kindColor(kind: TimelineItem['kind']) {
   return map[kind]
 }
 
+/** Unsatisfied (pending/partial) → orange; paid → green; cancelled → muted. */
+function billBorderColor(status: string | null | undefined) {
+  const s = normalizeBillStatus(status)
+  if (s === 'paid') return 'border-l-emerald-500'
+  if (s === 'cancelled') return 'border-l-slate-400'
+  return 'border-l-orange-500'
+}
+
 function isMissedAppointment(item: TimelineItem) {
   const s = (item.appointmentStatus || '').toLowerCase()
   return s === 'cancelled' || s === 'no show'
 }
 
-function canManageAppointment(item: TimelineItem) {
-  if (!item.appointmentId || !item.appointmentDate) return false
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
-  const statusLower = (item.appointmentStatus || '').toLowerCase()
-  const isPending = statusLower === 'pending'
-  if (item.appointmentDate < today && !isMissedAppointment(item) && !isPending) return false
-  return true
-}
-
-function toggleApptExpand(item: TimelineItem) {
-  if (!item.appointmentId || !canManageAppointment(item) || apptActionBusy.value) return
-  const next = expandedApptId.value === item.appointmentId ? null : item.appointmentId
-  expandedApptId.value = next
-  if (!next) return
-  afterExpandScroll(isLastTimelineItem(item), `[data-appt-id="${next}"] [data-appt-actions]`)
+function openApptDetail(item: TimelineItem) {
+  if (!item.appointmentId) return
+  detailAppointmentId.value = item.appointmentId
+  detailOpen.value = true
 }
 
 function openBook() {
@@ -730,46 +731,13 @@ function openBook() {
   bookOpen.value = true
 }
 
-function openApptEdit(item: TimelineItem) {
-  if (!item.appointmentId) return
-  editAppointmentId.value = item.appointmentId
+function onApptDetailEdit(id: number) {
+  editAppointmentId.value = id
   bookOpen.value = true
 }
 
-async function deleteAppointment(item: TimelineItem) {
-  if (!item.appointmentId || apptActionBusy.value) return
-  if (!window.confirm('Delete this appointment? This cannot be undone.')) return
-  apptActionBusy.value = true
-  try {
-    await api(`/appointments/${item.appointmentId}`, { method: 'DELETE' })
-    expandedApptId.value = null
-    toast.add({ title: 'Appointment deleted', color: 'success' })
-    if (client.value) await loadChart(client.value.client_id)
-  } catch (e: unknown) {
-    toast.add({ title: e instanceof Error ? e.message : 'Delete failed', color: 'error' })
-  } finally {
-    apptActionBusy.value = false
-  }
-}
-
-async function sendMissedReminder(item: TimelineItem) {
-  if (!item.appointmentId || apptActionBusy.value) return
-  if (!waEnabled.value) {
-    toast.add({ title: 'WhatsApp is not enabled for this clinic', color: 'warning' })
-    return
-  }
-  if (!window.confirm('Send missed appointment WhatsApp reminder to this client?')) return
-  apptActionBusy.value = true
-  try {
-    await api(`/appointments/${item.appointmentId}/missed-reminder`, { method: 'POST', body: {} })
-    toast.add({ title: 'Missed appointment reminder sent', color: 'success' })
-    expandedApptId.value = null
-    if (client.value) await loadChart(client.value.client_id)
-  } catch (e: unknown) {
-    toast.add({ title: e instanceof Error ? e.message : 'Reminder failed', color: 'error' })
-  } finally {
-    apptActionBusy.value = false
-  }
+function onApptDetailUpdated() {
+  if (client.value) void loadChart(client.value.client_id)
 }
 
 async function refreshWaEnabled() {
@@ -826,7 +794,7 @@ async function sendCardWhatsApp(cardId: number, code?: string) {
 }
 
 async function deleteWarrantyCard(cardId: number, code?: string) {
-  if (!window.confirm(`Delete warranty card ${code || `#${cardId}`}? It will be removed from the timeline.`)) {
+  if (!window.confirm(`Delete warranty card ${code || `#${cardId}`}? This cannot be undone.`)) {
     return
   }
   cardActionBusy.value = true
@@ -856,6 +824,10 @@ function formatBillStatus(status: string | null | undefined) {
 function canCollectBill(status: string | null | undefined) {
   const s = normalizeBillStatus(status)
   return s === 'pending' || s === 'partial'
+}
+
+function billHasLinkedReceipts(item: TimelineItem) {
+  return (item.billLinkedReceipts || 0) > 0
 }
 
 function collectAmountForBill(amountDue: number, totalPaid: number, status: string | null | undefined) {
@@ -894,8 +866,18 @@ function openCollect(item: TimelineItem) {
 
 async function cancelBill(item: TimelineItem) {
   if (!item.billId || billActionBusy.value) return
+  if (billHasLinkedReceipts(item)) {
+    const n = item.billLinkedReceipts || 0
+    toast.add({
+      title: n === 1
+        ? 'Delete the linked receipt first, then cancel this bill'
+        : `Delete ${n} linked receipts first, then cancel this bill`,
+      color: 'warning'
+    })
+    return
+  }
   if (!window.confirm(
-    `Cancel bill #${item.billId} for ₹${item.billAmountDue}? Linked receipts stay on the timeline (unlinked from this bill).`
+    `Cancel bill #${item.billId} for ₹${item.billAmountDue}? This cannot be undone.`
   )) return
   billActionBusy.value = true
   try {
@@ -913,7 +895,7 @@ async function cancelBill(item: TimelineItem) {
 async function deleteBill(item: TimelineItem) {
   if (!item.billId || billActionBusy.value) return
   if (!window.confirm(
-    `Permanently delete bill #${item.billId}? Linked receipts stay as orphaned payments. This cannot be undone.`
+    `Permanently delete bill #${item.billId}? This cannot be undone.`
   )) return
   billActionBusy.value = true
   try {
@@ -930,7 +912,7 @@ async function deleteBill(item: TimelineItem) {
 
 async function deleteReceipt(item: TimelineItem) {
   if (!item.receiptId || billActionBusy.value) return
-  if (!window.confirm(`Delete this receipt? It will be removed from the timeline.`)) return
+  if (!window.confirm('Delete this receipt? This cannot be undone.')) return
   billActionBusy.value = true
   try {
     await api(`/receipts/${item.receiptId}`, { method: 'DELETE' })
@@ -1619,78 +1601,31 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                     </div>
                   </div>
 
-                  <!-- Appointment bubble (expandable when manageable) -->
+                  <!-- Appointment bubble → detail modal -->
                   <div
                     v-else-if="item.kind === 'appointment'"
                     :data-appt-id="item.appointmentId"
-                    class="overflow-hidden rounded-lg border border-slate-200 border-l-4 bg-white"
+                    class="cursor-pointer overflow-hidden rounded-lg border border-slate-200 border-l-4 bg-white"
                     :class="[
                       kindColor(item.kind),
-                      isMissedAppointment(item) ? 'border-l-red-400' : '',
-                      canManageAppointment(item) ? 'cursor-pointer' : ''
+                      isMissedAppointment(item) ? 'border-l-red-400' : ''
                     ]"
-                    @click="toggleApptExpand(item)"
+                    @click="openApptDetail(item)"
                   >
                     <div class="px-3 py-2">
                       <div class="flex items-center justify-between gap-2">
                         <p class="text-sm font-medium text-[#1C2B35]">{{ item.title }}</p>
-                        <div class="flex shrink-0 items-center gap-1.5">
-                          <p
-                            v-if="item.apptRelative"
-                            class="text-[11px] font-semibold"
-                            :class="item.apptRelative.includes('ago') || item.apptRelative === 'Yesterday'
-                              ? 'text-slate-400'
-                              : 'text-[#0097A7]'"
-                          >
-                            {{ item.apptRelative }}
-                          </p>
-                          <UIcon
-                            v-if="canManageAppointment(item)"
-                            name="i-lucide-chevron-down"
-                            class="h-3.5 w-3.5 text-slate-400 transition"
-                            :class="expandedApptId === item.appointmentId ? 'rotate-180' : ''"
-                          />
-                        </div>
+                        <p
+                          v-if="item.apptRelative"
+                          class="shrink-0 text-[11px] font-semibold"
+                          :class="item.apptRelative.includes('ago') || item.apptRelative === 'Yesterday'
+                            ? 'text-slate-400'
+                            : 'text-[#0097A7]'"
+                        >
+                          {{ item.apptRelative }}
+                        </p>
                       </div>
                       <p v-if="item.body" class="mt-0.5 truncate text-xs text-slate-500">{{ item.body }}</p>
-                    </div>
-                    <div
-                      v-if="expandedApptId === item.appointmentId && canManageAppointment(item)"
-                      data-appt-actions
-                      class="grid gap-px border-t border-slate-200 bg-slate-100"
-                      :class="isMissedAppointment(item) ? 'grid-cols-3' : 'grid-cols-2'"
-                      @click.stop
-                    >
-                      <button
-                        type="button"
-                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-[#00838f] hover:bg-[#e0f7fa] disabled:opacity-50"
-                        :disabled="apptActionBusy"
-                        @click="openApptEdit(item)"
-                      >
-                        <UIcon name="i-lucide-pencil" class="h-3.5 w-3.5" />
-                        Edit
-                      </button>
-                      <button
-                        v-if="isMissedAppointment(item)"
-                        type="button"
-                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold disabled:opacity-50"
-                        :class="waEnabled ? 'text-emerald-700 hover:bg-emerald-50' : 'cursor-not-allowed text-slate-400'"
-                        :disabled="apptActionBusy || !waEnabled"
-                        :title="waEnabled ? 'Send missed appt reminder' : 'WhatsApp not enabled'"
-                        @click="sendMissedReminder(item)"
-                      >
-                        <UIcon name="i-lucide-message-circle" class="h-3.5 w-3.5" />
-                        Reminder
-                      </button>
-                      <button
-                        type="button"
-                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
-                        :disabled="apptActionBusy"
-                        @click="deleteAppointment(item)"
-                      >
-                        <UIcon name="i-lucide-trash-2" class="h-3.5 w-3.5" />
-                        Delete
-                      </button>
                     </div>
                   </div>
 
@@ -1816,7 +1751,7 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                     v-else-if="item.kind === 'bill'"
                     :data-bill-id="item.billId"
                     class="overflow-hidden rounded-lg border border-slate-200 border-l-4 bg-white"
-                    :class="kindColor(item.kind)"
+                    :class="billBorderColor(item.billStatus)"
                   >
                     <button
                       type="button"
@@ -1858,6 +1793,8 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                         type="button"
                         class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
                         :disabled="billActionBusy"
+                        :class="billHasLinkedReceipts(item) ? 'opacity-50' : ''"
+                        :title="billHasLinkedReceipts(item) ? 'Delete linked receipts first' : 'Cancel bill'"
                         @click="cancelBill(item)"
                       >
                         <UIcon name="i-lucide-ban" class="h-3.5 w-3.5" />
@@ -2106,8 +2043,15 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
       :client-name="client?.name"
       :edit-appointment-id="editAppointmentId"
       @booked="() => { editAppointmentId = null; client && loadChart(client.client_id) }"
-      @saved="() => { editAppointmentId = null; expandedApptId = null; client && loadChart(client.client_id) }"
+      @saved="() => { editAppointmentId = null; client && loadChart(client.client_id) }"
       @update:open="(v) => { if (!v) editAppointmentId = null }"
+    />
+    <DeskAppointmentDetailModal
+      v-model:open="detailOpen"
+      :appointment-id="detailAppointmentId"
+      hide-open-patient
+      @edit="onApptDetailEdit"
+      @updated="onApptDetailUpdated"
     />
     <DeskNoteEditModal
       v-model:open="noteEditOpen"

@@ -236,6 +236,8 @@ def import_warranty(*, clinic_id: int) -> None:
                     warranty_period=int(row.get("warranty_period") or 0),
                     visible=_as_bool(row.get("visible", 1)),
                     user_id=int(row["user_id"]) if row.get("user_id") else None,
+                    # Legacy MySQL has no create timestamp — keep null for noon fallback.
+                    created_at=None,
                 )
                 if existing:
                     for k, v in payload.items():

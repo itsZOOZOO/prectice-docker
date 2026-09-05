@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     s3_region: str = "ap-south-1"
     s3_url_ttl: int = 3600
 
+    # Staff app notifications (reporting.pratikp.com) — empty key = disabled
+    reporting_api_url: str = "https://reporting.pratikp.com/api.php"
+    reporting_api_key: str = ""
+    reporting_group_id: int = 1
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

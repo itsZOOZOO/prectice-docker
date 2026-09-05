@@ -64,9 +64,10 @@ const bookPrefill = reactive({
   time: null as string | null,
   doctorId: null as number | null
 })
+const editAppointmentId = ref<number | null>(null)
 
 const detailOpen = ref(false)
-const detailAppt = ref<Appt | null>(null)
+const detailAppointmentId = ref<number | null>(null)
 const dayListOpen = ref(false)
 const dayListDate = ref<string | null>(null)
 const dayListItems = ref<Appt[]>([])
@@ -329,6 +330,7 @@ function openBookEmpty(doctorId: number, time: string) {
 }
 
 function openBookBlank() {
+  editAppointmentId.value = null
   bookPrefill.date = calDate.value
   bookPrefill.time = null
   bookPrefill.doctorId = bookDoctorPrefill.value
@@ -336,6 +338,7 @@ function openBookBlank() {
 }
 
 function openBookForDate(date: string) {
+  editAppointmentId.value = null
   bookPrefill.date = date
   bookPrefill.time = null
   bookPrefill.doctorId = bookDoctorPrefill.value
@@ -343,7 +346,7 @@ function openBookForDate(date: string) {
 }
 
 function openApptDetail(appt: Appt) {
-  detailAppt.value = appt
+  detailAppointmentId.value = appt.appointment_id
   detailOpen.value = true
 }
 
@@ -386,9 +389,6 @@ async function setStatus(appt: Appt, status: string) {
     }
     const di = dayListItems.value.findIndex(a => a.appointment_id === appt.appointment_id)
     if (di >= 0) dayListItems.value[di] = updated
-    if (detailAppt.value?.appointment_id === appt.appointment_id) {
-      detailAppt.value = updated
-    }
     toast.add({ title: `Marked ${status}`, color: 'success' })
     refreshBadges()
   } catch (e: unknown) {
@@ -396,20 +396,28 @@ async function setStatus(appt: Appt, status: string) {
   }
 }
 
-function formatDateLabel(iso: string) {
-  const d = new Date(`${iso}T12:00:00`)
-  return d.toLocaleDateString('en-IN', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric'
-  })
-}
-
 function onBooked() {
   bookOpen.value = false
+  editAppointmentId.value = null
   loadView()
   refreshBadges()
+}
+
+function onDetailEdit(id: number) {
+  editAppointmentId.value = id
+  bookPrefill.date = null
+  bookPrefill.time = null
+  bookPrefill.doctorId = null
+  bookOpen.value = true
+}
+
+function onDetailUpdated() {
+  loadView()
+  refreshBadges()
+}
+
+function onDetailOpenPatient(clientId: number) {
+  void openPatient(clientId)
 }
 
 watch([calDate, calMode], loadView)
@@ -691,62 +699,23 @@ onMounted(async () => {
 
     <DeskBookModal
       v-model:open="bookOpen"
-      :client-id="openPatientCache?.id"
-      :client-name="openPatientCache?.name"
+      :client-id="editAppointmentId ? null : openPatientCache?.id"
+      :client-name="editAppointmentId ? null : openPatientCache?.name"
       :date="bookPrefill.date"
       :time="bookPrefill.time"
       :doctor-id="bookPrefill.doctorId"
+      :edit-appointment-id="editAppointmentId"
       @booked="onBooked"
+      @saved="onBooked"
     />
 
-    <UModal v-model:open="detailOpen" title="Appointment">
-      <template #body>
-        <div v-if="detailAppt" class="space-y-4">
-          <div>
-            <p class="text-lg font-semibold text-[#1C2B35]">{{ detailAppt.name }}</p>
-            <p class="mt-1 text-sm text-slate-500">{{ formatDateLabel(detailAppt.appointment_date) }}</p>
-            <p class="text-sm text-slate-600">
-              {{ formatAmPm(detailAppt.appointment_time) }}
-              <span v-if="detailAppt.end_time"> – {{ formatAmPm(detailAppt.end_time) }}</span>
-            </p>
-          </div>
-          <div class="space-y-1 text-sm text-slate-600">
-            <p v-if="detailAppt.doctor_name"><span class="text-slate-400">Doctor:</span> {{ detailAppt.doctor_name }}</p>
-            <p v-if="detailAppt.service_name"><span class="text-slate-400">Service:</span> {{ detailAppt.service_name }}</p>
-            <p v-if="detailAppt.phone"><span class="text-slate-400">Phone:</span> {{ detailAppt.phone }}</p>
-            <p v-if="detailAppt.notes"><span class="text-slate-400">Notes:</span> {{ detailAppt.notes }}</p>
-            <p>
-              <span class="text-slate-400">Status:</span>
-              <UBadge class="ml-1" :color="statusColor(detailAppt.status)" variant="subtle" size="sm">
-                {{ detailAppt.status }}
-              </UBadge>
-            </p>
-          </div>
-          <div class="flex flex-wrap gap-1">
-            <UButton
-              v-for="s in statuses"
-              :key="s.status_id"
-              size="xs"
-              :variant="detailAppt.status === s.status_name ? 'solid' : 'outline'"
-              :color="detailAppt.status === s.status_name ? statusColor(s.status_name) : 'neutral'"
-              @click="setStatus(detailAppt!, s.status_name)"
-            >
-              {{ s.status_name }}
-            </UButton>
-          </div>
-          <div class="flex justify-end gap-2 pt-1">
-            <UButton color="neutral" variant="ghost" @click="detailOpen = false">Close</UButton>
-            <UButton
-              v-if="detailAppt.client_id"
-              class="bg-[#0097A7]"
-              @click="openPatient(detailAppt.client_id!); detailOpen = false"
-            >
-              Open patient
-            </UButton>
-          </div>
-        </div>
-      </template>
-    </UModal>
+    <DeskAppointmentDetailModal
+      v-model:open="detailOpen"
+      :appointment-id="detailAppointmentId"
+      @edit="onDetailEdit"
+      @updated="onDetailUpdated"
+      @open-patient="onDetailOpenPatient"
+    />
 
     <UModal v-model:open="dayListOpen" :title="dayListLabel">
       <template #body>

@@ -14,6 +14,7 @@ from app.config import get_settings
 
 MAX_NOTE_FILES = 10
 MAX_FILE_BYTES = 10 * 1024 * 1024
+MAX_TASK_VOICE_BYTES = 25 * 1024 * 1024
 ALLOWED_NOTE_MIME = {
     "image/jpeg",
     "image/jpg",
@@ -33,6 +34,19 @@ ALLOWED_PHOTO_MIME = {
     "image/heic",
     "image/heif",
 }
+ALLOWED_TASK_VOICE_MIME = {
+    "audio/webm",
+    "audio/mp4",
+    "audio/aac",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/x-m4a",
+    "audio/m4a",
+    "application/octet-stream",
+}
+ALLOWED_TASK_VOICE_EXT = {".webm", ".mp4", ".ogg", ".wav", ".aac", ".m4a", ".mp3"}
 
 
 @lru_cache
@@ -192,3 +206,47 @@ def validate_photo_file(content_type: str | None, size: int, filename: str) -> s
     if mime not in ALLOWED_PHOTO_MIME and not mime.startswith("image/"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Profile photo must be an image")
     return mime
+
+
+def validate_task_voice(content_type: str | None, size: int, filename: str) -> str:
+    mime = (content_type or "").split(";")[0].strip().lower() or "application/octet-stream"
+    lower = filename.lower()
+    ext = "." + lower.rsplit(".", 1)[-1] if "." in lower else ""
+    if mime not in ALLOWED_TASK_VOICE_MIME and ext not in ALLOWED_TASK_VOICE_EXT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported voice type for {filename}",
+        )
+    if mime == "application/octet-stream":
+        if ext == ".webm":
+            mime = "audio/webm"
+        elif ext in {".m4a", ".mp4", ".aac"}:
+            mime = "audio/mp4"
+        elif ext == ".ogg":
+            mime = "audio/ogg"
+        elif ext == ".wav":
+            mime = "audio/wav"
+        elif ext == ".mp3":
+            mime = "audio/mpeg"
+    if size > MAX_TASK_VOICE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f'Voice file "{filename}" exceeds the 25 MB limit',
+        )
+    if size <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f'Empty voice file "{filename}"')
+    return mime
+
+
+def upload_task_voice(data: bytes, *, filename: str, content_type: str) -> str:
+    """Upload task voice note under upload/task_voices/ (legacy key prefix)."""
+    client, settings = require_s3()
+    safe = _sanitize_filename(filename) or "voice.webm"
+    key = f"upload/task_voices/{int(time.time())}_{safe}"
+    client.put_object(
+        Bucket=settings.s3_bucket,
+        Key=key,
+        Body=data,
+        ContentType=content_type or "application/octet-stream",
+    )
+    return key

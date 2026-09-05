@@ -111,6 +111,11 @@ function onPickBg(ev: Event) {
 }
 
 function clearBg() {
+  if (logoPath.value || pendingBgFile.value) {
+    if (!window.confirm('Remove letterhead background? Save to apply. This cannot be undone after save.')) {
+      return
+    }
+  }
   removeBackground.value = true
   pendingBgFile.value = null
   if (pendingBgPreview.value) {

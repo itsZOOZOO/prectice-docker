@@ -24,6 +24,14 @@ def treatments_catalog(
     return OkResponse(data=tp.list_catalog(db, user.clinic_id))
 
 
+@router.get("/treatments/catalog/browse", response_model=OkResponse)
+def treatments_catalog_browse(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    return OkResponse(data=tp.list_catalog_browse(db, user.clinic_id))
+
+
 @router.get("/treatments/{treatment_id}/price-options", response_model=OkResponse)
 def treatment_price_options(
     treatment_id: int,

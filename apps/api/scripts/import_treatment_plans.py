@@ -22,14 +22,30 @@ from sqlalchemy import text
 from app.db import Base, SessionLocal, engine
 from app.models import (
     PriceOption,
+    PriceOptionPhoto,
     Treatment,
+    TreatmentPhoto,
     TreatmentPlan,
     TreatmentSubPlan,
     TreatmentSubPlanPhoto,
 )
 
 
+def _load_dotenv() -> None:
+    """Load apps/api/.env with override (passwords may contain '/' or ';' which breaks `source`)."""
+    env_path = ROOT / ".env"
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        os.environ[key] = val
+
+
 def _mysql():
+    _load_dotenv()
     missing = [k for k in ("MYSQL_HOST", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE") if not os.getenv(k)]
     if missing:
         raise SystemExit(f"Missing env: {', '.join(missing)}")
@@ -58,6 +74,8 @@ def _reset_sequences(db) -> None:
     for table, col in (
         ("treatments", "treatment_id"),
         ("price_options", "price_option_id"),
+        ("treatment_photos", "photo_id"),
+        ("price_option_photos", "photo_id"),
         ("treatment_plans", "plan_id"),
         ("treatment_sub_plans", "sub_plan_id"),
         ("treatment_sub_plan_photos", "photo_id"),
@@ -136,6 +154,66 @@ def import_treatment_plans(*, clinic_id: int) -> None:
                             price=po.get("price") or 0,
                             explainer=po.get("explainer"),
                             is_foc=_as_bool(po.get("is_foc")),
+                        )
+                    )
+            db.flush()
+
+            treatment_photos = []
+            if treatment_ids:
+                fmt = ",".join(["%s"] * len(treatment_ids))
+                cur.execute(
+                    f"SELECT * FROM treatment_photos WHERE treatment_id IN ({fmt}) "
+                    f"ORDER BY sort_order ASC, id ASC",
+                    treatment_ids,
+                )
+                treatment_photos = cur.fetchall()
+            stats["treatment_photos"] = len(treatment_photos)
+            for ph in treatment_photos:
+                pid = int(ph["id"])
+                key = (ph.get("url") or "").strip()
+                if not key:
+                    continue
+                existing = db.get(TreatmentPhoto, pid)
+                if existing:
+                    existing.treatment_id = int(ph["treatment_id"])
+                    existing.photo_url = key
+                    existing.sort_order = int(ph.get("sort_order") or 0)
+                else:
+                    db.add(
+                        TreatmentPhoto(
+                            photo_id=pid,
+                            treatment_id=int(ph["treatment_id"]),
+                            photo_url=key,
+                            sort_order=int(ph.get("sort_order") or 0),
+                        )
+                    )
+            db.flush()
+
+            po_ids = [int(po["id"]) for po in price_options]
+            price_option_photos = []
+            if po_ids:
+                fmt = ",".join(["%s"] * len(po_ids))
+                cur.execute(
+                    f"SELECT * FROM price_option_photos WHERE price_option_id IN ({fmt}) ORDER BY id",
+                    po_ids,
+                )
+                price_option_photos = cur.fetchall()
+            stats["price_option_photos"] = len(price_option_photos)
+            for ph in price_option_photos:
+                pid = int(ph["id"])
+                key = (ph.get("url") or "").strip()
+                if not key:
+                    continue
+                existing = db.get(PriceOptionPhoto, pid)
+                if existing:
+                    existing.price_option_id = int(ph["price_option_id"])
+                    existing.photo_url = key
+                else:
+                    db.add(
+                        PriceOptionPhoto(
+                            photo_id=pid,
+                            price_option_id=int(ph["price_option_id"]),
+                            photo_url=key,
                         )
                     )
             db.flush()

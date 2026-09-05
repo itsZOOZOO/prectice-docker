@@ -90,10 +90,6 @@ const emptyMessage = computed(() => {
 <template>
   <div class="relative flex h-full min-h-0 flex-col">
     <div class="shrink-0 space-y-3 border-b border-slate-200 bg-white px-4 py-3">
-      <div class="flex items-center justify-between gap-2">
-        <h1 class="text-lg font-semibold text-[#1C2B35]">Patients</h1>
-        <span class="text-xs text-slate-400">{{ list.length }}</span>
-      </div>
       <div class="relative">
         <input
           v-model="q"

@@ -57,6 +57,27 @@ def _ensure_media_schema() -> None:
                 "ALTER TABLE notes ADD COLUMN IF NOT EXISTS attachment_url VARCHAR(512)"
             )
         )
+        conn.execute(
+            text(
+                "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachment_url VARCHAR(512)"
+            )
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE task_notes ADD COLUMN IF NOT EXISTS attachment_url VARCHAR(512)"
+            )
+        )
+        # Nullable first (no DEFAULT on ADD — that would backfill all legacy rows).
+        conn.execute(
+            text(
+                "ALTER TABLE card_issued ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ"
+            )
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE card_issued ALTER COLUMN created_at SET DEFAULT now()"
+            )
+        )
     Base.metadata.create_all(bind=engine)
     # Keep serials ahead of imported explicit PKs (warranty cards, etc.)
     with engine.begin() as conn:
@@ -66,6 +87,9 @@ def _ensure_media_schema() -> None:
             ("product_membership_types", "id"),
             ("terms_conditions", "id"),
             ("benefits", "id"),
+            ("task_notes", "note_id"),
+            ("treatment_photos", "photo_id"),
+            ("price_option_photos", "photo_id"),
         ):
             conn.execute(
                 text(

@@ -70,19 +70,34 @@ def _bill_paid_total(db: Session, bill_id: int) -> Decimal:
     return Decimal(str(total or 0))
 
 
-def _sync_bill_status(db: Session, bill: Bill) -> str:
+def _linked_receipt_count(db: Session, bill_id: int) -> int:
+    return int(
+        db.query(func.count(MoneyReceipt.receipt_id))
+        .filter(
+            MoneyReceipt.bill_id == bill_id,
+            MoneyReceipt.visible.is_(True),
+        )
+        .scalar()
+        or 0
+    )
+
+
+def _compute_bill_status(db: Session, bill: Bill) -> str:
+    """Derive status from payments; cancelled stays cancelled."""
     current = _normalize_status(bill.status)
     if current == "cancelled":
-        bill.status = "cancelled"
         return "cancelled"
     paid = _bill_paid_total(db, bill.bill_id)
     due = Decimal(str(bill.amount_due))
     if paid >= due:
-        bill.status = "paid"
-    elif paid > 0:
-        bill.status = "partial"
-    else:
-        bill.status = "pending"
+        return "paid"
+    if paid > 0:
+        return "partial"
+    return "pending"
+
+
+def _sync_bill_status(db: Session, bill: Bill) -> str:
+    bill.status = _compute_bill_status(db, bill)
     return bill.status
 
 
@@ -108,8 +123,10 @@ def _get_bill(db: Session, clinic_id: int, bill_id: int) -> Bill:
 def _bill_out(db: Session, bill: Bill) -> dict:
     data = BillOut.model_validate(bill).model_dump()
     data["amount_due"] = float(bill.amount_due)
-    data["status"] = _normalize_status(bill.status)
+    # Always reflect payment totals (heals stale status after soft-delete races).
+    data["status"] = _compute_bill_status(db, bill)
     data["total_paid"] = float(_bill_paid_total(db, bill.bill_id))
+    data["linked_receipt_count"] = _linked_receipt_count(db, bill.bill_id)
     return data
 
 
@@ -211,7 +228,15 @@ def cancel_bill(
     bill = _get_bill(db, user.clinic_id, bill_id)
     if _normalize_status(bill.status) == "cancelled":
         return OkResponse(data=_bill_out(db, bill))
-    _orphan_receipts(db, bill.bill_id)
+    linked = _linked_receipt_count(db, bill.bill_id)
+    if linked > 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Delete {linked} linked receipt{'s' if linked != 1 else ''} first, "
+                "then cancel this bill"
+            ),
+        )
     bill.status = "cancelled"
     db.commit()
     db.refresh(bill)
@@ -324,6 +349,8 @@ def delete_receipt(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receipt not found")
     bill_id = receipt.bill_id
     receipt.visible = False
+    # Session autoflush is off — flush so paid-total query excludes this receipt.
+    db.flush()
     if bill_id:
         bill = db.get(Bill, bill_id)
         if bill and bill.clinic_id == user.clinic_id and bill.visible:

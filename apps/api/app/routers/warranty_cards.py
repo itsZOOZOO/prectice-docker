@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -24,6 +24,8 @@ from app.models import (
 from app.schemas import OkResponse
 
 router = APIRouter(tags=["warranty-cards"])
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 PRODUCT_CODES: dict[int, str] = {
     1: "ZI",
@@ -117,6 +119,7 @@ def _generate_unique_code(db: Session, product_id: int, start: date) -> str:
 def _serialize_card(db: Session, card: CardIssued) -> dict[str, Any]:
     card_type = db.get(CardType, card.card_type_id)
     product = db.get(ProductMembershipType, card.product_id)
+    created = card.created_at.isoformat() if card.created_at else None
     return {
         "card_id": card.id,
         "client_id": card.client_id,
@@ -133,6 +136,7 @@ def _serialize_card(db: Session, card: CardIssued) -> dict[str, Any]:
         "number_of_units": card.number_of_units,
         "warranty_period": card.warranty_period,
         "note": card.note or "",
+        "created_at": created,
     }
 
 
@@ -227,6 +231,7 @@ def create_card(
         warranty_period=body.warranty_period,
         visible=True,
         user_id=user.user_id,
+        created_at=datetime.now(IST),
     )
     db.add(card)
     db.commit()

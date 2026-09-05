@@ -66,7 +66,12 @@ def desk_summary(
     receipts_total = float(sum((r.amount for r in receipts), Decimal("0")))
     open_tasks = (
         db.query(Task)
-        .filter(Task.clinic_id == user.clinic_id, Task.visible.is_(True), Task.status == "Open")
+        .filter(
+            Task.clinic_id == user.clinic_id,
+            Task.visible.is_(True),
+            Task.status.in_(["Open", "Pending"]),
+            Task.due_date == today,
+        )
         .count()
     )
     lab_counts = lab_svc.summary_counts(db, user.clinic_id)

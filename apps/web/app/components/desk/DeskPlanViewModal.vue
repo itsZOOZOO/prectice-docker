@@ -67,7 +67,7 @@ watch(isOpen, (open) => {
 })
 
 async function onDelete() {
-  if (!props.planId || !confirm('Delete this treatment plan?')) return
+  if (!props.planId || !confirm('Delete this treatment plan? This cannot be undone.')) return
   deleting.value = true
   try {
     await api(`/treatment-plans/${props.planId}`, { method: 'DELETE' })

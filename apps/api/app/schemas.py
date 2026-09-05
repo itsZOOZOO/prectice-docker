@@ -309,6 +309,20 @@ class TaskUpdate(BaseModel):
     status: str | None = None
 
 
+class TaskNoteCreate(BaseModel):
+    note_text: str = Field(min_length=1)
+
+
+class TaskNoteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    note_id: int
+    note_text: str
+    attachment_url: str | None = None
+    created_at: datetime
+    user_name: str | None = None
+
+
 class TaskOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -316,6 +330,7 @@ class TaskOut(BaseModel):
     clinic_id: int
     client_id: int | None
     task_description: str
+    attachment_url: str | None = None
     due_date: date | None
     status: str
     assignee_id: int | None
@@ -324,3 +339,5 @@ class TaskOut(BaseModel):
     created_at: datetime
     client_name: str | None = None
     assignee_name: str | None = None
+    created_by_name: str | None = None
+    notes: list[TaskNoteOut] | None = None
