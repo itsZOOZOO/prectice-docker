@@ -48,7 +48,7 @@ def list_filters(
     dashboard_only: bool = Query(default=False),
 ) -> OkResponse:
     items = cf.list_filters(db, user.clinic_id, dashboard_only=dashboard_only)
-    return OkResponse(data={"filters": items, "tags": cf.list_client_tags(user.clinic_id)})
+    return OkResponse(data={"filters": items, "tags": cf.list_client_tags(db, user.clinic_id)})
 
 
 @router.post("", response_model=OkResponse, status_code=status.HTTP_201_CREATED)

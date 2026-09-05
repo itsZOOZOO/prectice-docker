@@ -44,8 +44,22 @@ type TimelineItem = {
 type Client = ClientRow & {
   age: number | null
   gender: string | null
+  date_of_birth?: string | null
+  lead_source?: string | null
+  reference?: string | null
+  country_code?: number | null
   client_personal_note: string | null
   checked_in_at: string | null
+  client_tags?: string | null
+  client_tag_ids?: number[]
+  phones?: Array<{
+    id: number
+    country_code: string
+    phone_number: string
+    phone_type?: string | null
+    notes?: string | null
+    is_primary: boolean
+  }>
 }
 
 type PendingFile = { file: File, preview: string | null }
@@ -176,6 +190,64 @@ const noteShowDatetime = ref(false)
 const noteDatetimeCustomized = ref(false)
 const toggling = ref(false)
 const bookOpen = ref(false)
+const editClientOpen = ref(false)
+
+const editClientInitial = computed(() => {
+  const c = client.value
+  if (!c) return null
+  return {
+    name: c.name,
+    photoUrl: c.profile_photo_url,
+    date_of_birth: c.date_of_birth,
+    age: c.age,
+    gender: c.gender,
+    place: c.place,
+    lead_source: c.lead_source,
+    reference: c.reference,
+    status: c.status,
+    client_personal_note: c.client_personal_note,
+    phones: (c.phones && c.phones.length)
+      ? c.phones.map(p => ({
+          phone_id: p.id,
+          country_code: p.country_code,
+          phone_number: p.phone_number,
+          phone_type: p.phone_type,
+          notes: p.notes,
+          is_primary: p.is_primary
+        }))
+      : c.number
+        ? [{
+            country_code: `+${c.country_code || 91}`,
+            phone_number: c.number,
+            phone_type: 'Primary',
+            is_primary: true
+          }]
+        : []
+  }
+})
+
+function openEditClient() {
+  if (!client.value) return
+  editClientOpen.value = true
+}
+
+async function onClientEdited() {
+  if (!client.value) return
+  await loadChart(client.value.client_id)
+  if (!props.mobileChart) await loadList()
+}
+
+function onClientDeleted() {
+  editClientOpen.value = false
+  client.value = null
+  timeline.value = []
+  if (props.mobileChart) {
+    void navigateTo('/dashboard')
+  } else {
+    void clearPatient()
+    void loadList()
+  }
+}
 const editAppointmentId = ref<number | null>(null)
 const detailOpen = ref(false)
 const detailAppointmentId = ref<number | null>(null)
@@ -1326,9 +1398,28 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                   <span v-if="client.age"> · {{ client.age }}y</span>
                   · {{ client.status }}
                 </p>
+                <DeskClientProfileStatusTags
+                  :client-id="client.client_id"
+                  :status="client.status"
+                  :tag-ids="client.client_tag_ids || []"
+                  class="mt-2"
+                  @update:status="(s) => { if (client) client.status = s }"
+                  @update:tags="(ids, names) => {
+                    if (!client) return
+                    client.client_tag_ids = ids
+                    client.client_tags = names
+                  }"
+                />
               </div>
             </div>
             <div class="flex flex-wrap gap-2">
+              <button
+                type="button"
+                class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                @click="openEditClient"
+              >
+                Edit
+              </button>
               <button
                 type="button"
                 class="rounded-lg px-3 py-2 text-sm font-medium text-white"
@@ -1386,6 +1477,17 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                   {{ client.number || 'No phone' }}
                   <span v-if="client.status" class="text-slate-400"> · {{ client.status }}</span>
                 </p>
+                <DeskClientProfileStatusTags
+                  :client-id="client.client_id"
+                  :status="client.status"
+                  :tag-ids="client.client_tag_ids || []"
+                  @update:status="(s) => { if (client) client.status = s }"
+                  @update:tags="(ids, names) => {
+                    if (!client) return
+                    client.client_tag_ids = ids
+                    client.client_tags = names
+                  }"
+                />
                 <p v-if="client.client_personal_note" class="mt-2 text-sm text-slate-500">
                   {{ client.client_personal_note }}
                 </p>
@@ -1469,6 +1571,13 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
             </div>
 
             <div class="flex shrink-0 gap-2 border-t border-slate-200 bg-white px-3 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
+              <button
+                type="button"
+                class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700"
+                @click="openEditClient"
+              >
+                Edit
+              </button>
               <button
                 type="button"
                 class="flex-1 rounded-xl px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
@@ -2045,6 +2154,13 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
       @booked="() => { editAppointmentId = null; client && loadChart(client.client_id) }"
       @saved="() => { editAppointmentId = null; client && loadChart(client.client_id) }"
       @update:open="(v) => { if (!v) editAppointmentId = null }"
+    />
+    <DeskEditPatientModal
+      v-model:open="editClientOpen"
+      :client-id="client?.client_id || 0"
+      :initial="editClientInitial"
+      @saved="onClientEdited"
+      @deleted="onClientDeleted"
     />
     <DeskAppointmentDetailModal
       v-model:open="detailOpen"

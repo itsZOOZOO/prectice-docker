@@ -41,6 +41,15 @@ class ClinicOut(BaseModel):
     clinic_email: str | None = None
 
 
+class ClientPhoneIn(BaseModel):
+    id: int | None = None
+    country_code: str = "+91"
+    phone_number: str = Field(min_length=1, max_length=30)
+    phone_type: str | None = "Primary"
+    notes: str | None = None
+    is_primary: bool = False
+
+
 class ClientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     number: str | None = None
@@ -54,6 +63,8 @@ class ClientCreate(BaseModel):
     reference: str | None = None
     client_personal_note: str | None = None
     calling_name: str | None = None
+    phones: list[ClientPhoneIn] | None = None
+    check_in_status: bool = False
 
 
 class ClientUpdate(BaseModel):
@@ -69,6 +80,17 @@ class ClientUpdate(BaseModel):
     reference: str | None = None
     client_personal_note: str | None = None
     calling_name: str | None = None
+    phones: list[ClientPhoneIn] | None = None
+    deleted_phone_ids: list[int] | None = None
+
+
+class ClientPhoneOut(BaseModel):
+    id: int
+    country_code: str
+    phone_number: str
+    phone_type: str | None = None
+    notes: str | None = None
+    is_primary: bool = False
 
 
 class ClientOut(BaseModel):

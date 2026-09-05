@@ -14,6 +14,8 @@ from app.models import (
     Appointment,
     Bill,
     Client,
+    ClientTag,
+    ClientTagDefinition,
     ClinicClientFilter,
     ClinicClientFilterMember,
     MoneyReceipt,
@@ -35,9 +37,71 @@ RELATIVE_DAYS = (7, 15, 30, 60, 90)
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def list_client_tags(_clinic_id: int) -> list[dict[str, Any]]:
-    """Tags not yet modeled in pin — empty until a tags table exists."""
-    return []
+def list_client_tags(db: Session, clinic_id: int) -> list[dict[str, Any]]:
+    rows = (
+        db.query(ClientTagDefinition)
+        .filter(ClientTagDefinition.clinic_id == clinic_id)
+        .order_by(ClientTagDefinition.tag_name.asc())
+        .all()
+    )
+    return [
+        {"client_tag_id": int(r.client_tag_id), "tag_name": r.tag_name}
+        for r in rows
+    ]
+
+
+def assigned_tags_for_client(db: Session, clinic_id: int, client_id: int) -> list[dict[str, Any]]:
+    rows = (
+        db.query(ClientTagDefinition)
+        .join(ClientTag, ClientTag.client_tag_id == ClientTagDefinition.client_tag_id)
+        .filter(
+            ClientTag.client_id == client_id,
+            ClientTagDefinition.clinic_id == clinic_id,
+        )
+        .order_by(ClientTagDefinition.tag_name.asc())
+        .all()
+    )
+    return [
+        {"client_tag_id": int(r.client_tag_id), "tag_name": r.tag_name}
+        for r in rows
+    ]
+
+
+def set_client_tags(
+    db: Session,
+    clinic_id: int,
+    client_id: int,
+    tag_ids: list[int],
+) -> list[dict[str, Any]]:
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for raw in tag_ids:
+        tid = int(raw)
+        if tid > 0 and tid not in seen:
+            seen.add(tid)
+            normalized.append(tid)
+
+    if normalized:
+        valid = {
+            int(r.client_tag_id)
+            for r in db.query(ClientTagDefinition.client_tag_id)
+            .filter(
+                ClientTagDefinition.clinic_id == clinic_id,
+                ClientTagDefinition.client_tag_id.in_(normalized),
+            )
+            .all()
+        }
+        if sorted(valid) != sorted(normalized):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="One or more tags are invalid for this clinic.",
+            )
+
+    db.query(ClientTag).filter(ClientTag.client_id == client_id).delete(synchronize_session=False)
+    for tid in normalized:
+        db.add(ClientTag(client_id=client_id, client_tag_id=tid))
+    db.flush()
+    return assigned_tags_for_client(db, clinic_id, client_id)
 
 
 def normalize_money_threshold(raw: Any) -> float | None:
@@ -77,14 +141,14 @@ def _normalize_tag_list(raw: Any, available_tags: list[str]) -> list[str]:
     return out
 
 
-def normalize_criteria(clinic_id: int, raw: Any) -> dict[str, Any]:
+def normalize_criteria(db: Session, clinic_id: int, raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="criteria object is required.",
         )
 
-    available_tags = [t["tag_name"] for t in list_client_tags(clinic_id)]
+    available_tags = [t["tag_name"] for t in list_client_tags(db, clinic_id)]
     status_include = _normalize_status_list(raw.get("status_include"))
     status_exclude = _normalize_status_list(raw.get("status_exclude"))
     tag_include = _normalize_tag_list(raw.get("tag_include"), available_tags)
@@ -213,7 +277,7 @@ def create_filter(
     name = (name or "").strip()
     if not name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Filter name is required.")
-    normalized = normalize_criteria(clinic_id, criteria if criteria is not None else {})
+    normalized = normalize_criteria(db, clinic_id, criteria if criteria is not None else {})
     row = ClinicClientFilter(
         clinic_id=clinic_id,
         name=name,
@@ -245,7 +309,7 @@ def update_filter(db: Session, filter_id: int, clinic_id: int, body: dict[str, A
         row.show_on_dashboard = bool(body.get("show_on_dashboard"))
         changed = True
     if "criteria" in body:
-        row.criteria_json = normalize_criteria(clinic_id, body.get("criteria"))
+        row.criteria_json = normalize_criteria(db, clinic_id, body.get("criteria"))
         changed = True
 
     if not changed:
@@ -368,8 +432,41 @@ def _build_criteria_clause(clinic_id: int, criteria: dict[str, Any]) -> Any | No
     if status_exclude:
         parts.append(Client.status.notin_(list(status_exclude)))
 
-    # Tags not modeled yet — tag_include with values can't match; if present after
-    # normalize they are always empty until tags exist. Keep no-op for exclude too.
+    tag_include = criteria.get("tag_include") or []
+    if tag_include:
+        parts.append(
+            exists(
+                select(1)
+                .select_from(ClientTag)
+                .join(
+                    ClientTagDefinition,
+                    ClientTag.client_tag_id == ClientTagDefinition.client_tag_id,
+                )
+                .where(
+                    ClientTag.client_id == Client.client_id,
+                    ClientTagDefinition.clinic_id == clinic_id,
+                    ClientTagDefinition.tag_name.in_(list(tag_include)),
+                )
+            )
+        )
+
+    tag_exclude = criteria.get("tag_exclude") or []
+    if tag_exclude:
+        parts.append(
+            ~exists(
+                select(1)
+                .select_from(ClientTag)
+                .join(
+                    ClientTagDefinition,
+                    ClientTag.client_tag_id == ClientTagDefinition.client_tag_id,
+                )
+                .where(
+                    ClientTag.client_id == Client.client_id,
+                    ClientTagDefinition.clinic_id == clinic_id,
+                    ClientTagDefinition.tag_name.in_(list(tag_exclude)),
+                )
+            )
+        )
 
     date_crit = criteria.get("date") if isinstance(criteria.get("date"), dict) else {}
     date_mode = str(date_crit.get("mode") or "any")
@@ -522,7 +619,7 @@ def preview_count(
     *,
     filter_id: int | None = None,
 ) -> int:
-    normalized = normalize_criteria(clinic_id, criteria if criteria is not None else {})
+    normalized = normalize_criteria(db, clinic_id, criteria if criteria is not None else {})
     q = _matching_client_id_query(db, clinic_id, normalized, filter_id=filter_id)
     return q.distinct().count()
 
@@ -530,7 +627,7 @@ def preview_count(
 def client_ids_for_filter(db: Session, clinic_id: int, filter_id: int) -> list[int]:
     row = assert_filter(db, filter_id, clinic_id)
     criteria = row.criteria_json if isinstance(row.criteria_json, dict) else {}
-    normalized = normalize_criteria(clinic_id, criteria)
+    normalized = normalize_criteria(db, clinic_id, criteria)
     rows = _matching_client_id_query(db, clinic_id, normalized, filter_id=filter_id).distinct().all()
     return [int(r[0]) for r in rows]
 
@@ -546,7 +643,7 @@ def list_clients_for_filter(
 ) -> tuple[int, list[Client]]:
     row = assert_filter(db, filter_id, clinic_id)
     criteria = row.criteria_json if isinstance(row.criteria_json, dict) else {}
-    normalized = normalize_criteria(clinic_id, criteria)
+    normalized = normalize_criteria(db, clinic_id, criteria)
 
     id_subq = (
         _matching_client_id_query(db, clinic_id, normalized, filter_id=filter_id)

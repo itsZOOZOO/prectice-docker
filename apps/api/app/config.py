@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     reporting_api_key: str = ""
     reporting_group_id: int = 1
 
+    # Public treatment plan share (myplan.in) — copy/share URL host
+    plan_public_base_url: str = "https://myplan.in"
+    # WhatsApp Meta template (button host is Meta-approved; path only in button_params)
+    wa_plan_template_name: str = "patient_plan_share_v_1"
+    wa_plan_template_language: str = "gu"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

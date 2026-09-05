@@ -32,6 +32,12 @@ const BASE_SETTINGS_ITEMS: Omit<DeskMasterItem, 'locked'>[] = [
     icon: '📋'
   },
   {
+    id: 'client-tags',
+    label: 'Client tags',
+    description: 'Tags for profiles & patient list filters',
+    icon: '🏷️'
+  },
+  {
     id: 'dental-labs',
     label: 'Dental labs',
     description: 'Lab partners for case orders',
@@ -258,6 +264,7 @@ function isSection(id: string): id is SettingsSection {
           @detail-view-change="doctorsInDetail = $event"
         />
         <DeskClientFiltersPanel v-else-if="itemId === 'patient-lists'" />
+        <DeskClientTagsSettingsPanel v-else-if="itemId === 'client-tags'" />
         <DeskLabsSettingsPanel v-else-if="itemId === 'dental-labs'" />
         <DeskWhatsAppSettingsPanel v-else-if="itemId === 'whatsapp'" />
         <DeskMedicineTemplatesPanel v-else-if="itemId === 'medicine-templates'" />

@@ -109,7 +109,15 @@ def import_treatment_plans(*, clinic_id: int) -> None:
                 if existing:
                     existing.clinic_id = clinic_id
                     existing.name = t.get("name") or existing.name
+                    existing.name_gu = t.get("name_gu")
                     existing.short_explainer = t.get("short_explainer")
+                    existing.short_explainer_gu = t.get("short_explainer_gu")
+                    existing.badge_en = t.get("badge_en")
+                    existing.badge_gu = t.get("badge_gu")
+                    existing.recovery_days = t.get("recovery_days")
+                    existing.achievement_value = t.get("achievement_value")
+                    existing.achievement_label = t.get("achievement_label")
+                    existing.achievement_label_gu = t.get("achievement_label_gu")
                     existing.default_appts = int(t.get("default_appts") or 0)
                     existing.active = _as_bool(t.get("active", 1)) if t.get("active") is not None else True
                     existing.sort_order = int(t.get("sort_order") or 0)
@@ -119,7 +127,15 @@ def import_treatment_plans(*, clinic_id: int) -> None:
                             treatment_id=tid,
                             clinic_id=clinic_id,
                             name=t.get("name") or f"Treatment {tid}",
+                            name_gu=t.get("name_gu"),
                             short_explainer=t.get("short_explainer"),
+                            short_explainer_gu=t.get("short_explainer_gu"),
+                            badge_en=t.get("badge_en"),
+                            badge_gu=t.get("badge_gu"),
+                            recovery_days=t.get("recovery_days"),
+                            achievement_value=t.get("achievement_value"),
+                            achievement_label=t.get("achievement_label"),
+                            achievement_label_gu=t.get("achievement_label_gu"),
                             default_appts=int(t.get("default_appts") or 0),
                             active=_as_bool(t.get("active", 1)) if t.get("active") is not None else True,
                             sort_order=int(t.get("sort_order") or 0),

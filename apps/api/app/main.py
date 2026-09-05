@@ -19,9 +19,11 @@ from app.routers import (
     lead_intelligence,
     media,
     prescriptions,
+    public_plans,
     settings,
     settings_clinic,
     settings_client_filters,
+    settings_client_tags,
     settings_doctors,
     settings_medicine,
     settings_setup,
@@ -64,6 +66,7 @@ app.include_router(settings_treatments.router, prefix="/api")
 app.include_router(settings_warranty.router, prefix="/api")
 app.include_router(settings_client_filters.router, prefix="/api")
 app.include_router(settings_client_filters.dashboard_router, prefix="/api")
+app.include_router(settings_client_tags.router, prefix="/api")
 app.include_router(settings_setup.router, prefix="/api")
 app.include_router(statistics.router, prefix="/api")
 app.include_router(call_intelligence.router, prefix="/api")
@@ -73,6 +76,7 @@ app.include_router(lead_intelligence.status_router, prefix="/api")
 app.include_router(wa_inbox.router, prefix="/api")
 app.include_router(labs.router, prefix="/api")
 app.include_router(treatment_plans.router, prefix="/api")
+app.include_router(public_plans.router, prefix="/api")
 app.include_router(warranty_cards.router, prefix="/api")
 app.include_router(media.router, prefix="/api")
 
@@ -115,6 +119,33 @@ def _ensure_media_schema() -> None:
                   IF to_regclass('appointments_services') IS NOT NULL THEN
                     ALTER TABLE appointments_services
                       ADD COLUMN IF NOT EXISTS allow_public_booking BOOLEAN NOT NULL DEFAULT false;
+                  END IF;
+                END $$;
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                  IF to_regclass('client_phone_numbers') IS NOT NULL THEN
+                    ALTER TABLE client_phone_numbers
+                      ADD COLUMN IF NOT EXISTS country_code VARCHAR(10) NOT NULL DEFAULT '+91';
+                    ALTER TABLE client_phone_numbers
+                      ADD COLUMN IF NOT EXISTS notes VARCHAR(255);
+                    ALTER TABLE client_phone_numbers
+                      ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+                  END IF;
+                  IF to_regclass('treatments') IS NOT NULL THEN
+                    ALTER TABLE treatments ADD COLUMN IF NOT EXISTS name_gu VARCHAR(255);
+                    ALTER TABLE treatments ADD COLUMN IF NOT EXISTS short_explainer_gu TEXT;
+                    ALTER TABLE treatments ADD COLUMN IF NOT EXISTS badge_en VARCHAR(120);
+                    ALTER TABLE treatments ADD COLUMN IF NOT EXISTS badge_gu VARCHAR(120);
+                    ALTER TABLE treatments ADD COLUMN IF NOT EXISTS recovery_days INTEGER;
+                    ALTER TABLE treatments ADD COLUMN IF NOT EXISTS achievement_value INTEGER;
+                    ALTER TABLE treatments ADD COLUMN IF NOT EXISTS achievement_label VARCHAR(120);
+                    ALTER TABLE treatments ADD COLUMN IF NOT EXISTS achievement_label_gu VARCHAR(120);
                   END IF;
                 END $$;
                 """

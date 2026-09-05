@@ -38,6 +38,8 @@ from app.models import (
     Bill,
     Client,
     ClientCheckinLog,
+    ClientTag,
+    ClientTagDefinition,
     Clinic,
     ClinicSetting,
     DentalLab,
@@ -177,6 +179,8 @@ def _wipe_clinic(db, clinic_id: int) -> None:
         AppointmentStatus,
         MedicineTemplate,
         ClinicSetting,
+        ClientTag,
+        ClientTagDefinition,
         Client,
         User,
         Clinic,
@@ -188,7 +192,17 @@ def _wipe_clinic(db, clinic_id: int) -> None:
     if task_ids:
         db.query(TaskNote).filter(TaskNote.task_id.in_(task_ids)).delete(synchronize_session=False)
         db.query(Task).filter(Task.task_id.in_(task_ids)).delete(synchronize_session=False)
+
+    client_ids = [
+        r[0]
+        for r in db.query(Client.client_id).filter(Client.clinic_id == clinic_id).all()
+    ]
+    if client_ids:
+        db.query(ClientTag).filter(ClientTag.client_id.in_(client_ids)).delete(synchronize_session=False)
+
     for model in tables:
+        if model is ClientTag:
+            continue
         if model is Clinic:
             db.query(model).filter(model.clinic_id == clinic_id).delete(synchronize_session=False)
         elif hasattr(model, "clinic_id"):

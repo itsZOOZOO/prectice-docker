@@ -5,16 +5,19 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from pydantic import BaseModel, Field
 from app.auth import get_current_user
 from app import client_filters as client_filters_svc
 from app.datetime_local import parse_clinic_local_datetime
 from app.db import get_db
 from app import media as media_svc
-from app.models import Bill, Client, ClientCheckinLog, MoneyReceipt, Note, NoteAttachment, User
+from app.models import Bill, Client, ClientCheckinLog, ClientPhone, MoneyReceipt, Note, NoteAttachment, User
 from app.schemas import (
     CheckinOut,
     ClientCreate,
     ClientOut,
+    ClientPhoneIn,
+    ClientPhoneOut,
     ClientUpdate,
     NoteAttachmentOut,
     NoteCreate,
@@ -129,11 +132,19 @@ def _serialize_client(
     client: Client,
     pending: dict | None = None,
     last_payment: dict | None = None,
+    phones: list[ClientPhone] | None = None,
+    tags: list[dict] | None = None,
 ) -> dict:
     data = ClientOut.model_validate(client).model_dump()
     key = (client.profile_photo_url or "").strip() or None
     data["profile_photo_key"] = key
     data["profile_photo_url"] = media_svc.resolve_media_key(key) if key else None
+    if phones is not None:
+        data["phones"] = [_serialize_phone(p) for p in phones]
+    if tags is not None:
+        data["tags"] = tags
+        data["client_tag_ids"] = [int(t["client_tag_id"]) for t in tags]
+        data["client_tags"] = ", ".join(t["tag_name"] for t in tags) or None
     if pending:
         data["pending_bill_id"] = int(pending.get("pending_bill_id") or 0)
         data["pending_amount"] = float(pending.get("pending_amount") or 0)
@@ -155,6 +166,122 @@ def _serialize_client(
         data["last_payment_at"] = None
         data["last_payment_bill_total"] = None
     return data
+
+
+def _serialize_phone(row: ClientPhone) -> dict:
+    return ClientPhoneOut(
+        id=row.id,
+        country_code=(row.country_code or "+91").strip() or "+91",
+        phone_number=row.phone,
+        phone_type=row.label,
+        notes=row.notes,
+        is_primary=bool(row.is_primary),
+    ).model_dump()
+
+
+def _normalize_country_code(code: str | None) -> str:
+    raw = (code or "").strip() or "+91"
+    return raw if raw.startswith("+") else f"+{raw}"
+
+
+def _country_code_int(code: str) -> int:
+    digits = "".join(ch for ch in code if ch.isdigit())
+    try:
+        return int(digits) if digits else 91
+    except ValueError:
+        return 91
+
+
+def _active_phones(db: Session, client_id: int) -> list[ClientPhone]:
+    return (
+        db.query(ClientPhone)
+        .filter(
+            ClientPhone.client_id == client_id,
+            ClientPhone.is_active.is_(True),
+        )
+        .order_by(ClientPhone.is_primary.desc(), ClientPhone.id.asc())
+        .all()
+    )
+
+
+def _sync_phones(
+    db: Session,
+    *,
+    clinic_id: int,
+    client: Client,
+    phones: list[ClientPhoneIn],
+    deleted_phone_ids: list[int] | None = None,
+) -> list[ClientPhone]:
+    cleaned = [p for p in phones if (p.phone_number or "").strip()]
+    if not cleaned:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one phone number is required.",
+        )
+    if not any(p.is_primary for p in cleaned):
+        cleaned[0].is_primary = True
+    # Exactly one primary
+    primary_seen = False
+    for p in cleaned:
+        if p.is_primary and not primary_seen:
+            primary_seen = True
+        elif p.is_primary:
+            p.is_primary = False
+
+    if deleted_phone_ids:
+        (
+            db.query(ClientPhone)
+            .filter(
+                ClientPhone.client_id == client.client_id,
+                ClientPhone.clinic_id == clinic_id,
+                ClientPhone.id.in_(deleted_phone_ids),
+            )
+            .update({"is_active": False, "is_primary": False}, synchronize_session=False)
+        )
+
+    existing = {
+        row.id: row
+        for row in db.query(ClientPhone)
+        .filter(
+            ClientPhone.client_id == client.client_id,
+            ClientPhone.clinic_id == clinic_id,
+        )
+        .all()
+    }
+
+    kept_ids: set[int] = set()
+    for p in cleaned:
+        cc = _normalize_country_code(p.country_code)
+        number = p.phone_number.strip()
+        phone_type = (p.phone_type or "Primary").strip() or "Primary"
+        notes = (p.notes or "").strip() or None
+        if p.id and p.id in existing:
+            row = existing[p.id]
+            row.phone = number
+            row.country_code = cc
+            row.label = phone_type
+            row.notes = notes
+            row.is_primary = bool(p.is_primary)
+            row.is_active = True
+            kept_ids.add(row.id)
+        else:
+            row = ClientPhone(
+                clinic_id=clinic_id,
+                client_id=client.client_id,
+                phone=number,
+                country_code=cc,
+                label=phone_type,
+                notes=notes,
+                is_primary=bool(p.is_primary),
+                is_active=True,
+            )
+            db.add(row)
+
+    primary = next((p for p in cleaned if p.is_primary), cleaned[0])
+    client.number = primary.phone_number.strip()
+    client.country_code = _country_code_int(_normalize_country_code(primary.country_code))
+    db.flush()
+    return _active_phones(db, client.client_id)
 
 
 def _note_attachment_keys(db: Session, note: Note) -> list[tuple[int | None, str]]:
@@ -240,6 +367,24 @@ def list_clients(
     client_ids = [r.client_id for r in rows]
     pending_map = _pending_bills_by_client(db, user.clinic_id, client_ids)
     last_pay_map = _last_payments_by_client(db, user.clinic_id, client_ids)
+    tags_by_client: dict[int, list[dict]] = {cid: [] for cid in client_ids}
+    if client_ids:
+        from app.models import ClientTag, ClientTagDefinition
+
+        tag_rows = (
+            db.query(ClientTag.client_id, ClientTagDefinition.client_tag_id, ClientTagDefinition.tag_name)
+            .join(ClientTagDefinition, ClientTag.client_tag_id == ClientTagDefinition.client_tag_id)
+            .filter(
+                ClientTag.client_id.in_(client_ids),
+                ClientTagDefinition.clinic_id == user.clinic_id,
+            )
+            .order_by(ClientTagDefinition.tag_name.asc())
+            .all()
+        )
+        for cid, tid, tname in tag_rows:
+            tags_by_client.setdefault(int(cid), []).append(
+                {"client_tag_id": int(tid), "tag_name": tname}
+            )
     return OkResponse(
         data={
             "total": total,
@@ -248,6 +393,7 @@ def list_clients(
                     r,
                     pending_map.get(r.client_id),
                     last_pay_map.get(r.client_id),
+                    tags=tags_by_client.get(r.client_id, []),
                 )
                 for r in rows
             ],
@@ -261,26 +407,64 @@ def create_client(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> OkResponse:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name is required.")
+    if not body.gender or not str(body.gender).strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Gender is required.")
+    if not body.date_of_birth:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Date of birth is required.")
+
+    phones_in = body.phones
+    if not phones_in and body.number:
+        phones_in = [
+            ClientPhoneIn(
+                country_code=f"+{body.country_code or 91}",
+                phone_number=body.number.strip(),
+                phone_type="Primary",
+                is_primary=True,
+            )
+        ]
+    if not phones_in:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one phone number is required.",
+        )
+
+    now = datetime.now(timezone.utc)
     client = Client(
         clinic_id=user.clinic_id,
-        name=body.name.strip(),
+        name=name,
         calling_name=body.calling_name,
-        number=body.number,
-        country_code=body.country_code,
+        number=None,
+        country_code=body.country_code or 91,
         place=body.place,
         age=body.age,
-        gender=body.gender,
+        gender=(body.gender or "").strip().lower() or None,
         date_of_birth=body.date_of_birth,
-        status=body.status,
+        status=body.status or "Inquiry",
         lead_source=body.lead_source,
         reference=body.reference,
         client_personal_note=body.client_personal_note,
         created_by=user.user_id,
+        check_in_status=bool(body.check_in_status),
+        checked_in_at=now if body.check_in_status else None,
     )
     db.add(client)
+    db.flush()
+    phones = _sync_phones(db, clinic_id=user.clinic_id, client=client, phones=list(phones_in))
+    if body.check_in_status:
+        db.add(
+            ClientCheckinLog(
+                clinic_id=user.clinic_id,
+                client_id=client.client_id,
+                user_id=user.user_id,
+                action="check_in",
+            )
+        )
     db.commit()
     db.refresh(client)
-    data = _serialize_client(client)
+    data = _serialize_client(client, phones=phones)
 
     from app import activity_log
 
@@ -302,7 +486,24 @@ def get_client(
     db: Annotated[Session, Depends(get_db)],
 ) -> OkResponse:
     client = _get_clinic_client(db, user.clinic_id, client_id)
-    return OkResponse(data=_serialize_client(client))
+    phones = _active_phones(db, client.client_id)
+    tags = client_filters_svc.assigned_tags_for_client(db, user.clinic_id, client.client_id)
+    # Legacy: single clients.number with no phone rows
+    if not phones and client.number:
+        phones_out = [
+            ClientPhoneOut(
+                id=0,
+                country_code=f"+{client.country_code or 91}",
+                phone_number=client.number,
+                phone_type="Primary",
+                notes=None,
+                is_primary=True,
+            ).model_dump()
+        ]
+        data = _serialize_client(client, tags=tags)
+        data["phones"] = phones_out
+        return OkResponse(data=data)
+    return OkResponse(data=_serialize_client(client, phones=phones, tags=tags))
 
 
 @router.patch("/{client_id}", response_model=OkResponse)
@@ -313,13 +514,116 @@ def update_client(
     db: Annotated[Session, Depends(get_db)],
 ) -> OkResponse:
     client = _get_clinic_client(db, user.clinic_id, client_id)
-    for key, value in body.model_dump(exclude_unset=True).items():
+    payload = body.model_dump(exclude_unset=True)
+    phones_in = payload.pop("phones", None)
+    deleted_ids = payload.pop("deleted_phone_ids", None)
+    for key, value in payload.items():
         if key == "name" and isinstance(value, str):
             value = value.strip()
+        if key == "gender" and isinstance(value, str):
+            value = value.strip().lower() or None
         setattr(client, key, value)
+
+    phones: list[ClientPhone] | None = None
+    if phones_in is not None:
+        phone_models = [ClientPhoneIn.model_validate(p) for p in phones_in]
+        phones = _sync_phones(
+            db,
+            clinic_id=user.clinic_id,
+            client=client,
+            phones=phone_models,
+            deleted_phone_ids=deleted_ids,
+        )
+    elif deleted_ids:
+        (
+            db.query(ClientPhone)
+            .filter(
+                ClientPhone.client_id == client.client_id,
+                ClientPhone.clinic_id == user.clinic_id,
+                ClientPhone.id.in_(deleted_ids),
+            )
+            .update({"is_active": False, "is_primary": False}, synchronize_session=False)
+        )
+        phones = _active_phones(db, client.client_id)
+
     db.commit()
     db.refresh(client)
-    return OkResponse(data=_serialize_client(client))
+    if phones is None:
+        phones = _active_phones(db, client.client_id)
+    tags = client_filters_svc.assigned_tags_for_client(db, user.clinic_id, client.client_id)
+    return OkResponse(data=_serialize_client(client, phones=phones, tags=tags))
+
+
+class ClientStatusIn(BaseModel):
+    status: str = Field(min_length=1, max_length=50)
+
+
+class ClientTagsIn(BaseModel):
+    tag_ids: list[int] = Field(default_factory=list)
+
+
+@router.patch("/{client_id}/status", response_model=OkResponse)
+def update_client_status(
+    client_id: int,
+    body: ClientStatusIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    client = _get_clinic_client(db, user.clinic_id, client_id)
+    client.status = body.status.strip() or "Inquiry"
+    db.commit()
+    db.refresh(client)
+    tags = client_filters_svc.assigned_tags_for_client(db, user.clinic_id, client.client_id)
+    return OkResponse(data=_serialize_client(client, tags=tags))
+
+
+@router.get("/{client_id}/tags", response_model=OkResponse)
+def get_client_tags(
+    client_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    _get_clinic_client(db, user.clinic_id, client_id)
+    tags = client_filters_svc.assigned_tags_for_client(db, user.clinic_id, client_id)
+    return OkResponse(
+        data={
+            "tags": tags,
+            "client_tags": ", ".join(t["tag_name"] for t in tags) or None,
+            "client_tag_ids": [t["client_tag_id"] for t in tags],
+        }
+    )
+
+
+@router.put("/{client_id}/tags", response_model=OkResponse)
+def put_client_tags(
+    client_id: int,
+    body: ClientTagsIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    _get_clinic_client(db, user.clinic_id, client_id)
+    tags = client_filters_svc.set_client_tags(db, user.clinic_id, client_id, body.tag_ids)
+    db.commit()
+    return OkResponse(
+        data={
+            "tags": tags,
+            "client_tags": ", ".join(t["tag_name"] for t in tags) or None,
+            "client_tag_ids": [t["client_tag_id"] for t in tags],
+        }
+    )
+
+
+@router.delete("/{client_id}", response_model=OkResponse)
+def delete_client(
+    client_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    client = _get_clinic_client(db, user.clinic_id, client_id)
+    client.visible = False
+    client.check_in_status = False
+    db.commit()
+    return OkResponse(data={"client_id": client.client_id, "deleted": True})
 
 
 @router.post("/{client_id}/check-in", response_model=OkResponse)

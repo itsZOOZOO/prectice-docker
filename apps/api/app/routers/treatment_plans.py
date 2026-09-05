@@ -154,3 +154,125 @@ def update_treatment_plan_pricing(
 ) -> OkResponse:
     updated = tp.update_pricing(db, user.clinic_id, plan_id, body)
     return OkResponse(data=tp.serialize_plan(updated))
+
+
+@router.get("/treatment-plans/{plan_id}/share-links", response_model=OkResponse)
+def list_share_links(
+    plan_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import treatment_plan_share as share
+
+    return OkResponse(data={"items": share.list_links(db, user.clinic_id, plan_id)})
+
+
+@router.post("/treatment-plans/{plan_id}/share-links", response_model=OkResponse, status_code=status.HTTP_201_CREATED)
+def create_share_link(
+    plan_id: int,
+    body: dict[str, Any],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import treatment_plan_share as share
+
+    result = share.generate_link(
+        db,
+        clinic_id=user.clinic_id,
+        user_id=user.user_id,
+        plan_id=plan_id,
+        validity_days=int(body.get("validity_days") or 7),
+        notes=str(body.get("notes") or ""),
+    )
+    db.commit()
+    return OkResponse(data=result)
+
+
+@router.delete("/treatment-plans/{plan_id}/share-links/{link_id}", response_model=OkResponse)
+def delete_share_link(
+    plan_id: int,
+    link_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import treatment_plan_share as share
+
+    share.deactivate_link(db, user.clinic_id, plan_id, link_id)
+    db.commit()
+    return OkResponse(data={"deleted": True})
+
+
+@router.get("/treatment-plans/{plan_id}/share-links/{link_id}/analytics", response_model=OkResponse)
+def share_link_analytics(
+    plan_id: int,
+    link_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import treatment_plan_share as share
+
+    return OkResponse(data=share.analytics_for_link(db, user.clinic_id, plan_id, link_id))
+
+
+@router.post("/treatment-plans/{plan_id}/send-whatsapp", response_model=OkResponse)
+def send_plan_whatsapp(
+    plan_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OkResponse:
+    from app import treatment_plan_share as share
+    from app import whatsapp as wa
+    from app.models import Client, Note
+
+    plan = tp.get_plan_or_404(db, user.clinic_id, plan_id)
+    client = (
+        db.query(Client)
+        .filter(Client.client_id == plan.client_id, Client.clinic_id == user.clinic_id)
+        .first()
+    )
+    if not client:
+        raise HTTPException(status_code=422, detail="This plan is not linked to a client.")
+
+    phone = wa.resolve_phone(form_phone=None, client=client, db=db)
+    if not phone:
+        raise HTTPException(status_code=422, detail="No valid WhatsApp phone number found for this client.")
+
+    link = share.generate_link(
+        db,
+        clinic_id=user.clinic_id,
+        user_id=user.user_id,
+        plan_id=plan_id,
+        validity_days=7,
+        notes="Sent via WhatsApp",
+    )
+    result = wa.send_plan_share(
+        db,
+        clinic_id=user.clinic_id,
+        phone=phone,
+        patient_name=client.name,
+        public_path=link["public_path"],
+    )
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=502,
+            detail=result.get("message") or "WhatsApp send failed.",
+        )
+
+    note = Note(
+        clinic_id=user.clinic_id,
+        client_id=client.client_id,
+        user_id=user.user_id,
+        body=f"Treatment plan has been sent successfully via WhatsApp to {client.name}.",
+        visible=True,
+    )
+    db.add(note)
+    db.commit()
+    db.refresh(note)
+    return OkResponse(
+        data={
+            "wa_message_id": (result.get("response") or {}).get("wa_message_id"),
+            "share_url": link["share_url"],
+            "public_path": link["public_path"],
+            "note_id": note.note_id,
+        }
+    )

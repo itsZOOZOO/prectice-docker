@@ -28,6 +28,7 @@ export type SettingsSection =
   | 'treatment-templates'
   | 'warranty-templates'
   | 'patient-lists'
+  | 'client-tags'
   | 'setup-pin'
   | 'lead-intelligence'
 
@@ -71,6 +72,7 @@ const SETTINGS_SECTIONS = new Set<SettingsSection>([
   'treatment-templates',
   'warranty-templates',
   'patient-lists',
+  'client-tags',
   'setup-pin',
   'lead-intelligence'
 ])

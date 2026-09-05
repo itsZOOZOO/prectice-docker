@@ -14,6 +14,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models import Client, ClientPhone, ClinicSetting
+from app.config import get_settings
 
 DEFAULT_WA_API_URL = "https://wa.aarogyams.com/api.php"
 DEFAULT_INBOX_API_URL = "https://wa.aarogyams.com/api_inbox.php"
@@ -158,14 +159,21 @@ def resolve_phone(
     if client:
         primary = (
             db.query(ClientPhone)
-            .filter(ClientPhone.client_id == client.client_id, ClientPhone.is_primary.is_(True))
+            .filter(
+                ClientPhone.client_id == client.client_id,
+                ClientPhone.is_primary.is_(True),
+                ClientPhone.is_active.is_(True),
+            )
             .first()
         )
         if primary and primary.phone:
             return primary.phone.strip()
         any_phone = (
             db.query(ClientPhone)
-            .filter(ClientPhone.client_id == client.client_id)
+            .filter(
+                ClientPhone.client_id == client.client_id,
+                ClientPhone.is_active.is_(True),
+            )
             .order_by(ClientPhone.id.asc())
             .first()
         )
@@ -464,6 +472,39 @@ def send_warranty_card(
     result["note_id"] = note_id
     result["file_url"] = file_url
     return result
+
+
+def send_plan_share(
+    db: Session,
+    *,
+    clinic_id: int,
+    phone: str,
+    patient_name: str,
+    public_path: str,
+) -> dict[str, Any]:
+    """Meta template patient_plan_share_v_1 — button_params = path only (code/slug)."""
+    if not is_enabled(db, clinic_id):
+        return {"success": False, "message": DISABLED_MESSAGE, "response": None}
+
+    recipient = normalize_recipient(phone)
+    if not recipient:
+        return {
+            "success": False,
+            "message": "Invalid phone number format (must be 10-15 digits)",
+            "response": None,
+        }
+
+    settings = get_settings()
+    path = (public_path or "").lstrip("/")
+    payload = {
+        "to": recipient,
+        "type": "template",
+        "template_name": settings.wa_plan_template_name,
+        "language": settings.wa_plan_template_language,
+        "button_params": [path],
+        "contact_name": patient_name,
+    }
+    return _post_template(db, clinic_id, payload)
 
 
 def _post_template(db: Session, clinic_id: int, payload: dict[str, Any]) -> dict[str, Any]:

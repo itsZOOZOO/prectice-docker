@@ -121,6 +121,9 @@ class Client(Base):
     phone_numbers: Mapped[list[ClientPhone]] = relationship(
         back_populates="client", cascade="all, delete-orphan"
     )
+    tag_links: Mapped[list["ClientTag"]] = relationship(
+        back_populates="client", cascade="all, delete-orphan"
+    )
 
 
 class ClientPhone(Base):
@@ -130,10 +133,47 @@ class ClientPhone(Base):
     clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
     client_id: Mapped[int] = mapped_column(ForeignKey("clients.client_id"), nullable=False, index=True)
     phone: Mapped[str] = mapped_column(String(30), nullable=False)
-    label: Mapped[str | None] = mapped_column(String(50))
+    country_code: Mapped[str] = mapped_column(String(10), default="+91", nullable=False)
+    label: Mapped[str | None] = mapped_column(String(50))  # phone_type: Primary, Calling, …
+    notes: Mapped[str | None] = mapped_column(String(255))
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     client: Mapped[Client] = relationship(back_populates="phone_numbers")
+
+
+class ClientTagDefinition(Base):
+    """Clinic-scoped patient tag catalog (legacy client_tag_definitions)."""
+
+    __tablename__ = "client_tag_definitions"
+
+    client_tag_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    tag_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    short_code: Mapped[str | None] = mapped_column(String(10))
+    sync_priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("clinic_id", "tag_name", name="uq_client_tag_def_name"),
+    )
+
+
+class ClientTag(Base):
+    """Patient ↔ tag assignment (legacy client_tags)."""
+
+    __tablename__ = "client_tags"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.client_id"), nullable=False, index=True)
+    client_tag_id: Mapped[int] = mapped_column(
+        ForeignKey("client_tag_definitions.client_tag_id"), nullable=False, index=True
+    )
+
+    client: Mapped[Client] = relationship(back_populates="tag_links")
+
+    __table_args__ = (
+        UniqueConstraint("client_id", "client_tag_id", name="uq_client_tag_assignment"),
+    )
 
 
 class Note(Base):
@@ -502,7 +542,15 @@ class Treatment(Base):
     treatment_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name_gu: Mapped[str | None] = mapped_column(String(255))
     short_explainer: Mapped[str | None] = mapped_column(Text)
+    short_explainer_gu: Mapped[str | None] = mapped_column(Text)
+    badge_en: Mapped[str | None] = mapped_column(String(120))
+    badge_gu: Mapped[str | None] = mapped_column(String(120))
+    recovery_days: Mapped[int | None] = mapped_column(Integer)
+    achievement_value: Mapped[int | None] = mapped_column(Integer)
+    achievement_label: Mapped[str | None] = mapped_column(String(120))
+    achievement_label_gu: Mapped[str | None] = mapped_column(String(120))
     default_appts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -622,6 +670,43 @@ class TreatmentSubPlanPhoto(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     sub_plan: Mapped[TreatmentSubPlan] = relationship(back_populates="photos")
+
+
+class TreatmentPlanSharedLink(Base):
+    __tablename__ = "treatment_plan_shared_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("treatment_plans.plan_id"), nullable=False, index=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.clinic_id"), nullable=False, index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"))
+    token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    short_code: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    plan_slug: Mapped[str] = mapped_column(String(120), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    validity_days: Mapped[int] = mapped_column(Integer, default=7, nullable=False)
+    notes: Mapped[str | None] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    view_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_accessed: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("short_code", "plan_slug", name="uq_plan_share_code_slug"),
+    )
+
+
+class TreatmentPlanLinkAccessLog(Base):
+    __tablename__ = "treatment_plan_link_access_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    shared_link_id: Mapped[int] = mapped_column(
+        ForeignKey("treatment_plan_shared_links.id"), nullable=False, index=True
+    )
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(500))
+    session_duration: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    page_views: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # --- Warranty cards (ported from MySQL card_issued + lookups) ---

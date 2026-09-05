@@ -5,7 +5,8 @@ export const SETUP_LOCKED_SETTING_IDS = [
   'doctors-schedules',
   'treatment-templates',
   'clinic-settings',
-  'warranty-templates'
+  'warranty-templates',
+  'client-tags'
 ] as const
 
 export type SetupLockedSettingId = (typeof SETUP_LOCKED_SETTING_IDS)[number]

@@ -47,6 +47,7 @@ const detail = ref<PlanDetail | null>(null)
 const loading = ref(false)
 const deleting = ref(false)
 const lightbox = ref<string | null>(null)
+const shareOpen = ref(false)
 
 async function load() {
   if (!props.planId) return
@@ -143,6 +144,9 @@ function formatInr(n: number | null | undefined) {
 
         <div class="flex flex-wrap justify-end gap-2 pt-1">
           <UButton color="error" variant="ghost" :loading="deleting" @click="onDelete">Delete</UButton>
+          <UButton color="neutral" variant="outline" @click="shareOpen = true">
+            Share
+          </UButton>
           <UButton
             color="neutral"
             variant="outline"
@@ -164,6 +168,12 @@ function formatInr(n: number | null | undefined) {
       </div>
     </template>
   </UModal>
+
+  <DeskPlanShareModal
+    v-model:open="shareOpen"
+    :plan-id="planId"
+    :plan-title="detail?.title"
+  />
 
   <Teleport to="body">
     <div
