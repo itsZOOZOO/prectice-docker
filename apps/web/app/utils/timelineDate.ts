@@ -42,6 +42,20 @@ function formatCalendarDayRelative(isoOrKey: string): string {
   return `${Math.abs(diffDays)} days ago`
 }
 
+/** Appointment bubble relative day: Today / Tomorrow / After 30 days / 45 days ago. */
+export function apptRelativeLabel(dateStr: string): string {
+  const key = /^\d{4}-\d{2}-\d{2}$/.test(dateStr.trim()) ? dateStr.trim() : dateKey(dateStr)
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: IST })
+  const selected = new Date(`${key}T12:00:00`)
+  const todayDt = new Date(`${today}T12:00:00`)
+  const diff = Math.round((selected.getTime() - todayDt.getTime()) / 86_400_000)
+
+  if (diff < 0) return diff === -1 ? 'Yesterday' : `${Math.abs(diff)} days ago`
+  if (diff === 0) return 'Today'
+  if (diff === 1) return 'Tomorrow'
+  return `After ${diff} days`
+}
+
 /** Inline separator: TODAY / YESTERDAY / FRI, 12 SEPTEMBER 2026 (3 days ago) */
 export function formatDateSeparator(iso: string) {
   const key = dateKey(iso)

@@ -177,6 +177,55 @@ def send_appointment_confirm(
         "template_params": [when, patient_name],
         "contact_name": patient_name,
     }
+    return _post_template(db, clinic_id, payload)
+
+
+def format_missed_datetime(appt_date: date, appt_time: time) -> str:
+    # Match PHP: "Mon, 05 Sep 2026 at 10:30 AM"
+    weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    hour = appt_time.hour % 12 or 12
+    ampm = "AM" if appt_time.hour < 12 else "PM"
+    return (
+        f"{weekdays[appt_date.weekday()]}, {appt_date.day:02d} {months[appt_date.month - 1]} "
+        f"{appt_date.year} at {hour}:{appt_time.minute:02d} {ampm}"
+    )
+
+
+def send_missed_appointment_reminder(
+    db: Session,
+    *,
+    clinic_id: int,
+    phone: str,
+    patient_name: str,
+    appt_date: date,
+    appt_time: time,
+    clinic_contact: str,
+) -> dict[str, Any]:
+    if not is_enabled(db, clinic_id):
+        return {"success": False, "message": DISABLED_MESSAGE, "response": None}
+
+    recipient = normalize_recipient(phone)
+    if not recipient:
+        return {
+            "success": False,
+            "message": "Invalid phone number format (must be 10-15 digits)",
+            "response": None,
+        }
+
+    when = format_missed_datetime(appt_date, appt_time)
+    payload = {
+        "to": recipient,
+        "type": "template",
+        "template_name": "missed_appointment_english",
+        "language": "en_US",
+        "template_params": [patient_name, when, clinic_contact],
+        "contact_name": patient_name,
+    }
+    return _post_template(db, clinic_id, payload)
+
+
+def _post_template(db: Session, clinic_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     key = api_key(db, clinic_id)
     url = api_url(db, clinic_id)
     body = json.dumps(payload).encode("utf-8")
@@ -201,6 +250,8 @@ def send_appointment_confirm(
             # Intermediate API may return success in body
             if isinstance(parsed, dict) and "success" in parsed:
                 ok = bool(parsed.get("success"))
+            if isinstance(parsed, dict) and parsed.get("wa_message_id"):
+                ok = True
             message = ""
             if isinstance(parsed, dict):
                 message = str(parsed.get("message") or parsed.get("error") or "")

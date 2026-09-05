@@ -16,6 +16,9 @@ type TimelineItem = {
   noteId?: number
   labCaseId?: number
   planId?: number
+  appointmentId?: number
+  appointmentDate?: string
+  appointmentStatus?: string
   kind: 'note' | 'bill' | 'receipt' | 'rx' | 'appointment' | 'task' | 'lab' | 'plan'
   title: string
   body?: string
@@ -24,6 +27,8 @@ type TimelineItem = {
   attachments?: NoteAttachment[]
   planLocked?: boolean
   planCost?: number | null
+  /** Appointment calendar day relative label (Today / After 30 days / 45 days ago). */
+  apptRelative?: string
 }
 
 type Client = ClientRow & {
@@ -154,6 +159,10 @@ const noteShowDatetime = ref(false)
 const noteDatetimeCustomized = ref(false)
 const toggling = ref(false)
 const bookOpen = ref(false)
+const editAppointmentId = ref<number | null>(null)
+const expandedApptId = ref<number | null>(null)
+const apptActionBusy = ref(false)
+const waEnabled = ref(false)
 /** Mobile chart: timeline (default) vs lite profile (name/photo tap). */
 const mobileView = ref<'timeline' | 'profile'>('timeline')
 const profileStats = ref({ visits: 0, activeRx: 0, totalBilling: 0, paid: 0 })
@@ -326,10 +335,14 @@ async function loadChart(id: number) {
     for (const a of appts.items) {
       items.push({
         id: `appt-${a.appointment_id}`,
+        appointmentId: a.appointment_id,
+        appointmentDate: a.appointment_date,
+        appointmentStatus: a.status,
         kind: 'appointment',
         title: `Appt · ${formatAmPm(a.appointment_time)} · ${a.status}`,
         body: [a.doctor_name, a.service_name].filter(Boolean).join(' · ') || undefined,
-        at: `${a.appointment_date}T${a.appointment_time}:00`
+        at: `${a.appointment_date}T${a.appointment_time}:00`,
+        apptRelative: apptRelativeLabel(a.appointment_date)
       })
     }
     for (const t of tasks.items) {
@@ -391,6 +404,7 @@ watch(patientId, (id) => {
 
 onMounted(() => {
   if (!props.mobileChart) void loadList()
+  void refreshWaEnabled()
 })
 
 async function toggleCheckin() {
@@ -574,6 +588,90 @@ function kindColor(kind: TimelineItem['kind']) {
     plan: 'border-l-teal-600'
   }
   return map[kind]
+}
+
+function isMissedAppointment(item: TimelineItem) {
+  const s = (item.appointmentStatus || '').toLowerCase()
+  return s === 'cancelled' || s === 'no show'
+}
+
+function canManageAppointment(item: TimelineItem) {
+  if (!item.appointmentId || !item.appointmentDate) return false
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+  const statusLower = (item.appointmentStatus || '').toLowerCase()
+  const isPending = statusLower === 'pending'
+  if (item.appointmentDate < today && !isMissedAppointment(item) && !isPending) return false
+  return true
+}
+
+function toggleApptExpand(item: TimelineItem) {
+  if (!item.appointmentId || !canManageAppointment(item) || apptActionBusy.value) return
+  const next = expandedApptId.value === item.appointmentId ? null : item.appointmentId
+  expandedApptId.value = next
+  if (!next) return
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      const bubble = timelineEl.value?.querySelector(`[data-appt-id="${next}"]`) as HTMLElement | null
+      const actions = bubble?.querySelector('[data-appt-actions]') as HTMLElement | null
+      ;(actions || bubble)?.scrollIntoView({ block: 'nearest', behavior: 'smooth', inline: 'nearest' })
+    })
+  })
+}
+
+function openBook() {
+  editAppointmentId.value = null
+  bookOpen.value = true
+}
+
+function openApptEdit(item: TimelineItem) {
+  if (!item.appointmentId) return
+  editAppointmentId.value = item.appointmentId
+  bookOpen.value = true
+}
+
+async function deleteAppointment(item: TimelineItem) {
+  if (!item.appointmentId || apptActionBusy.value) return
+  if (!window.confirm('Delete this appointment? This cannot be undone.')) return
+  apptActionBusy.value = true
+  try {
+    await api(`/appointments/${item.appointmentId}`, { method: 'DELETE' })
+    expandedApptId.value = null
+    toast.add({ title: 'Appointment deleted', color: 'success' })
+    if (client.value) await loadChart(client.value.client_id)
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Delete failed', color: 'error' })
+  } finally {
+    apptActionBusy.value = false
+  }
+}
+
+async function sendMissedReminder(item: TimelineItem) {
+  if (!item.appointmentId || apptActionBusy.value) return
+  if (!waEnabled.value) {
+    toast.add({ title: 'WhatsApp is not enabled for this clinic', color: 'warning' })
+    return
+  }
+  if (!window.confirm('Send missed appointment WhatsApp reminder to this client?')) return
+  apptActionBusy.value = true
+  try {
+    await api(`/appointments/${item.appointmentId}/missed-reminder`, { method: 'POST', body: {} })
+    toast.add({ title: 'Missed appointment reminder sent', color: 'success' })
+    expandedApptId.value = null
+    if (client.value) await loadChart(client.value.client_id)
+  } catch (e: unknown) {
+    toast.add({ title: e instanceof Error ? e.message : 'Reminder failed', color: 'error' })
+  } finally {
+    apptActionBusy.value = false
+  }
+}
+
+async function refreshWaEnabled() {
+  try {
+    const wa = await api<{ enabled: boolean }>('/settings/whatsapp')
+    waEnabled.value = Boolean(wa.enabled)
+  } catch {
+    waEnabled.value = false
+  }
 }
 
 function openLabCase(item: TimelineItem) {
@@ -942,7 +1040,7 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
               <button
                 type="button"
                 class="rounded-lg border border-[#0097A7] px-3 py-2 text-sm font-medium text-[#0097A7] hover:bg-[#0097A7]/5"
-                @click="bookOpen = true"
+                @click="openBook"
               >
                 Book
               </button>
@@ -1013,7 +1111,7 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                   <button
                     type="button"
                     class="flex flex-col items-center gap-1 rounded-[10px] bg-[#fef9ec] px-1.5 py-2.5"
-                    @click="bookOpen = true"
+                    @click="openBook"
                   >
                     <UIcon name="i-lucide-calendar" class="h-5 w-5 text-[#b8860b]" />
                     <span class="text-[11px] font-medium text-[#b8860b]">Book</span>
@@ -1076,7 +1174,7 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
               <button
                 type="button"
                 class="flex-1 rounded-xl border border-[#0097A7] bg-[#e0f7fa] px-3 py-2.5 text-sm font-semibold text-[#00838f] active:bg-[#b2ebf2]"
-                @click="bookOpen = true"
+                @click="openBook"
               >
                 Book
               </button>
@@ -1152,6 +1250,81 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                     </p>
                   </div>
 
+                  <!-- Appointment bubble (expandable when manageable) -->
+                  <div
+                    v-else-if="item.kind === 'appointment'"
+                    :data-appt-id="item.appointmentId"
+                    class="overflow-hidden rounded-lg border border-slate-200 border-l-4 bg-white"
+                    :class="[
+                      kindColor(item.kind),
+                      isMissedAppointment(item) ? 'border-l-red-400' : '',
+                      canManageAppointment(item) ? 'cursor-pointer' : ''
+                    ]"
+                    @click="toggleApptExpand(item)"
+                  >
+                    <div class="px-3 py-2">
+                      <div class="flex items-center justify-between gap-2">
+                        <p class="text-sm font-medium text-[#1C2B35]">{{ item.title }}</p>
+                        <div class="flex shrink-0 items-center gap-1.5">
+                          <p
+                            v-if="item.apptRelative"
+                            class="text-[11px] font-semibold"
+                            :class="item.apptRelative.includes('ago') || item.apptRelative === 'Yesterday'
+                              ? 'text-slate-400'
+                              : 'text-[#0097A7]'"
+                          >
+                            {{ item.apptRelative }}
+                          </p>
+                          <UIcon
+                            v-if="canManageAppointment(item)"
+                            name="i-lucide-chevron-down"
+                            class="h-3.5 w-3.5 text-slate-400 transition"
+                            :class="expandedApptId === item.appointmentId ? 'rotate-180' : ''"
+                          />
+                        </div>
+                      </div>
+                      <p v-if="item.body" class="mt-0.5 truncate text-xs text-slate-500">{{ item.body }}</p>
+                    </div>
+                    <div
+                      v-if="expandedApptId === item.appointmentId && canManageAppointment(item)"
+                      data-appt-actions
+                      class="grid gap-px border-t border-slate-200 bg-slate-100"
+                      :class="isMissedAppointment(item) ? 'grid-cols-3' : 'grid-cols-2'"
+                      @click.stop
+                    >
+                      <button
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-[#00838f] hover:bg-[#e0f7fa] disabled:opacity-50"
+                        :disabled="apptActionBusy"
+                        @click="openApptEdit(item)"
+                      >
+                        <UIcon name="i-lucide-pencil" class="h-3.5 w-3.5" />
+                        Edit
+                      </button>
+                      <button
+                        v-if="isMissedAppointment(item)"
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold disabled:opacity-50"
+                        :class="waEnabled ? 'text-emerald-700 hover:bg-emerald-50' : 'cursor-not-allowed text-slate-400'"
+                        :disabled="apptActionBusy || !waEnabled"
+                        :title="waEnabled ? 'Send missed appt reminder' : 'WhatsApp not enabled'"
+                        @click="sendMissedReminder(item)"
+                      >
+                        <UIcon name="i-lucide-message-circle" class="h-3.5 w-3.5" />
+                        Reminder
+                      </button>
+                      <button
+                        type="button"
+                        class="flex items-center justify-center gap-1.5 bg-white px-2 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                        :disabled="apptActionBusy"
+                        @click="deleteAppointment(item)"
+                      >
+                        <UIcon name="i-lucide-trash-2" class="h-3.5 w-3.5" />
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+
                   <!-- Compact other events -->
                   <div
                     v-else
@@ -1200,11 +1373,6 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                 </button>
               </div>
               <div class="flex gap-2">
-                <input
-                  v-model="noteBody"
-                  placeholder="Add a note to the timeline…"
-                  class="h-10 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-[#0097A7] focus:bg-white"
-                >
                 <button
                   type="button"
                   class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border transition"
@@ -1218,7 +1386,7 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                 </button>
                 <button
                   type="button"
-                  class="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+                  class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-50"
                   title="Attach images or PDF"
                   :disabled="processingFiles || noteFiles.length >= MAX_NOTE_FILES"
                   @click="fileInput?.click()"
@@ -1233,12 +1401,19 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
                   class="hidden"
                   @change="onPickFiles"
                 >
+                <input
+                  v-model="noteBody"
+                  placeholder="Add note"
+                  class="h-10 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-[#0097A7] focus:bg-white"
+                >
                 <button
                   type="submit"
-                  class="rounded-lg bg-[#0097A7] px-4 text-sm font-medium text-white hover:bg-[#00838f] disabled:opacity-50"
+                  class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#0097A7] text-white hover:bg-[#00838f] disabled:opacity-50"
+                  title="Send note"
+                  aria-label="Send note"
                   :disabled="savingNote || processingFiles || (!noteBody.trim() && !noteFiles.length)"
                 >
-                  Save
+                  <UIcon name="i-lucide-send" class="h-4 w-4" />
                 </button>
               </div>
               <div v-if="noteFiles.length" class="space-y-1.5">
@@ -1324,7 +1499,10 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
       v-model:open="bookOpen"
       :client-id="client?.client_id"
       :client-name="client?.name"
-      @booked="client && loadChart(client.client_id)"
+      :edit-appointment-id="editAppointmentId"
+      @booked="() => { editAppointmentId = null; client && loadChart(client.client_id) }"
+      @saved="() => { editAppointmentId = null; expandedApptId = null; client && loadChart(client.client_id) }"
+      @update:open="(v) => { if (!v) editAppointmentId = null }"
     />
     <DeskLabCreateModal
       v-model:open="labCreateOpen"
@@ -1336,7 +1514,7 @@ const billDatetimeActive = computed(() => billShowDatetime.value || billDatetime
       v-model:open="labDetailOpen"
       :case-id="labDetailCaseId"
       @changed="() => { client && loadChart(client.client_id); bumpBadges() }"
-      @book="(p) => { bookOpen = true }"
+      @book="() => openBook()"
     />
     <DeskPlanCreateModal
       v-model:open="planCreateOpen"

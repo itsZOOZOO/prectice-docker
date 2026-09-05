@@ -10,14 +10,17 @@ const props = withDefaults(defineProps<{
   date?: string | null
   time?: string | null
   doctorId?: number | null
+  /** When set, modal loads this appointment and PATCHes on confirm. */
+  editAppointmentId?: number | null
 }>(), {
   clientId: null,
   clientName: null,
   date: null,
   time: null,
-  doctorId: null
+  doctorId: null,
+  editAppointmentId: null
 })
-const emit = defineEmits<{ booked: [] }>()
+const emit = defineEmits<{ booked: [], saved: [] }>()
 const { api } = useApi()
 const toast = useToast()
 
@@ -33,6 +36,8 @@ const waEnabled = ref(false)
 const sendWhatsapp = ref(false)
 const walkInMode = ref(false)
 
+const isEdit = computed(() => Boolean(props.editAppointmentId))
+
 const form = reactive({
   service_id: null as number | null,
   doctor_id: null as number | null,
@@ -44,7 +49,7 @@ const form = reactive({
 })
 
 const canSendWa = computed(() => waEnabled.value && Boolean((form.phone || '').trim() || form.client_id))
-const hasOpenPatient = computed(() => Boolean(props.clientId))
+const hasOpenPatient = computed(() => Boolean(props.clientId) || (isEdit.value && Boolean(form.client_id)))
 
 const stepLabels = computed(() => {
   const labels = [
@@ -57,6 +62,9 @@ const stepLabels = computed(() => {
   if (hasOpenPatient.value) return labels.filter(l => l.n !== 4)
   return labels
 })
+
+const modalTitle = computed(() => (isEdit.value ? 'Edit appointment' : 'Book appointment'))
+const confirmLabel = computed(() => (isEdit.value ? 'Save changes' : 'Confirm book'))
 
 const filteredClients = computed(() => {
   const q = clientQ.value.trim().toLowerCase()
@@ -77,7 +85,12 @@ async function loadSlots(preserveTime = false) {
     return
   }
   const data = await api<{ slots: string[] }>('/appointments/slots', {
-    query: { on: form.date, doctor_id: form.doctor_id, service_id: form.service_id || undefined }
+    query: {
+      on: form.date,
+      doctor_id: form.doctor_id,
+      service_id: form.service_id || undefined,
+      exclude_appointment_id: props.editAppointmentId || undefined
+    }
   })
   slots.value = data.slots
   if (preserveTime && form.appointment_time && !slots.value.includes(form.appointment_time)) {
@@ -94,6 +107,7 @@ watch(open, async (v) => {
   form.date = props.date || new Date().toISOString().slice(0, 10)
   clientQ.value = ''
   walkInMode.value = false
+  sendWhatsapp.value = false
 
   const [meta, wa] = await Promise.all([
     api<{ doctors: Doctor[], services: Service[] }>('/appointments/meta'),
@@ -102,6 +116,36 @@ watch(open, async (v) => {
   doctors.value = meta.doctors
   services.value = meta.services
   waEnabled.value = Boolean(wa.enabled)
+
+  if (props.editAppointmentId) {
+    try {
+      const appt = await api<{
+        appointment_id: number
+        client_id: number | null
+        name: string
+        phone: string | null
+        appointment_date: string
+        appointment_time: string
+        doctor_id: number
+        service_id: number | null
+      }>(`/appointments/${props.editAppointmentId}`)
+      form.client_id = appt.client_id
+      form.name = appt.name
+      form.phone = appt.phone || ''
+      form.date = appt.appointment_date
+      form.appointment_time = (appt.appointment_time || '').slice(0, 5)
+      form.doctor_id = appt.doctor_id
+      form.service_id = appt.service_id
+      await loadSlots(true)
+      entryStep.value = 1
+      step.value = 5
+      return
+    } catch (e: unknown) {
+      toast.add({ title: e instanceof Error ? e.message : 'Failed to load appointment', color: 'error' })
+      open.value = false
+      return
+    }
+  }
 
   if (props.clientId) {
     form.client_id = props.clientId
@@ -153,9 +197,6 @@ watch(() => [form.phone, form.client_id, waEnabled.value], () => {
     sendWhatsapp.value = false
     return
   }
-  if (canSendWa.value && !sendWhatsapp.value) {
-    // keep user choice; only force off when can't send
-  }
   if (!canSendWa.value) sendWhatsapp.value = false
 })
 
@@ -187,7 +228,7 @@ function pickClient(id: number) {
     form.name = c.name
     form.phone = c.number || ''
   }
-  sendWhatsapp.value = waEnabled.value && Boolean((form.phone || '').trim())
+  sendWhatsapp.value = false
   step.value = 5
 }
 
@@ -201,14 +242,13 @@ function startWalkIn() {
 
 function continueWalkIn() {
   if (!form.name.trim()) return
-  sendWhatsapp.value = waEnabled.value && Boolean((form.phone || '').trim())
+  sendWhatsapp.value = false
   step.value = 5
 }
 
 function goBack() {
   if (step.value <= entryStep.value) return
   if (step.value === 5 && hasOpenPatient.value) {
-    // Skip patient step when going back
     if (entryStep.value >= 4) {
       step.value = entryStep.value
       return
@@ -227,34 +267,43 @@ async function book() {
   if (!form.doctor_id || !form.appointment_time || !form.name.trim()) return
   booking.value = true
   try {
-    const result = await api<{ whatsapp_sent?: boolean, whatsapp_message?: string }>('/appointments', {
-      method: 'POST',
-      body: {
-        client_id: form.client_id,
-        doctor_id: form.doctor_id,
-        service_id: form.service_id,
-        name: form.name,
-        phone: form.phone || null,
-        appointment_date: form.date,
-        appointment_time: form.appointment_time,
-        send_whatsapp: sendWhatsapp.value && canSendWa.value
-      }
-    })
+    const payload = {
+      client_id: form.client_id,
+      doctor_id: form.doctor_id,
+      service_id: form.service_id,
+      name: form.name,
+      phone: form.phone || null,
+      appointment_date: form.date,
+      appointment_time: form.appointment_time,
+      send_whatsapp: sendWhatsapp.value && canSendWa.value
+    }
+    const result = isEdit.value
+      ? await api<{ whatsapp_sent?: boolean, whatsapp_message?: string }>(
+        `/appointments/${props.editAppointmentId}`,
+        { method: 'PATCH', body: payload }
+      )
+      : await api<{ whatsapp_sent?: boolean, whatsapp_message?: string }>('/appointments', {
+        method: 'POST',
+        body: payload
+      })
+
+    const doneLabel = isEdit.value ? 'Updated' : 'Booked'
     if (sendWhatsapp.value && canSendWa.value) {
       if (result.whatsapp_sent) {
-        toast.add({ title: 'Booked · WhatsApp sent', color: 'success' })
+        toast.add({ title: `${doneLabel} · WhatsApp sent`, color: 'success' })
       } else {
         toast.add({
-          title: 'Booked',
+          title: doneLabel,
           description: result.whatsapp_message || 'WhatsApp failed',
           color: 'warning'
         })
       }
     } else {
-      toast.add({ title: 'Appointment booked', color: 'success' })
+      toast.add({ title: isEdit.value ? 'Appointment updated' : 'Appointment booked', color: 'success' })
     }
     open.value = false
-    emit('booked')
+    if (isEdit.value) emit('saved')
+    else emit('booked')
   } catch (e: unknown) {
     toast.add({ title: e instanceof Error ? e.message : 'Failed', color: 'error' })
   } finally {
@@ -264,7 +313,7 @@ async function book() {
 </script>
 
 <template>
-  <UModal v-model:open="open" title="Book appointment">
+  <UModal v-model:open="open" :title="modalTitle">
     <template #body>
       <div class="flex max-h-[min(70vh,560px)] flex-col">
         <div class="mb-3 flex flex-wrap gap-1.5 text-[11px] font-medium text-slate-400">
@@ -288,7 +337,7 @@ async function book() {
           <template v-else-if="step === 2">Tap a doctor to continue</template>
           <template v-else-if="step === 3">Tap a time slot to continue</template>
           <template v-else-if="step === 4">Pick a patient, or walk-in</template>
-          <template v-else>Review and confirm</template>
+          <template v-else>{{ isEdit ? 'Review and save' : 'Review and confirm' }}</template>
         </p>
 
         <div class="min-h-0 flex-1 overflow-y-auto pb-2">
@@ -392,6 +441,7 @@ async function book() {
               <span>
                 <span class="font-medium text-[#1C2B35]">Send WhatsApp confirmation</span>
                 <span v-if="!canSendWa" class="mt-0.5 block text-xs text-slate-500">Add a phone number to enable</span>
+                <span v-else-if="isEdit" class="mt-0.5 block text-xs text-slate-500">Optional — off by default when editing</span>
               </span>
             </label>
           </div>
@@ -421,7 +471,7 @@ async function book() {
             :loading="booking"
             @click="book"
           >
-            Confirm book
+            {{ confirmLabel }}
           </UButton>
           <span v-else class="text-xs text-slate-400">Select to continue</span>
         </div>

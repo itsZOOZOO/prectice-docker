@@ -168,6 +168,19 @@ class AppointmentCreate(BaseModel):
     send_whatsapp: bool = False
 
 
+class AppointmentUpdate(BaseModel):
+    client_id: int | None = None
+    doctor_id: int
+    service_id: int | None = None
+    name: str = Field(min_length=1, max_length=255)
+    phone: str | None = None
+    appointment_date: date
+    appointment_time: time
+    status: str | None = None
+    notes: str | None = None
+    send_whatsapp: bool = False
+
+
 class AppointmentStatusUpdate(BaseModel):
     status: str = Field(min_length=1, max_length=50)
 
