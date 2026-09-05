@@ -2,7 +2,7 @@
 	email {$CADDY_EMAIL}
 }
 
-# Default prod: API only (UI on Vercel). nginx TLS → this Caddy (:8080).
+# Full stack only (docker-compose.full.yml) — proxies UI to Nuxt web:3000
 
 {$CADDY_DOMAIN} {
 	encode gzip
@@ -20,7 +20,7 @@
 	}
 
 	handle {
-		redir /docs permanent
+		reverse_proxy web:3000
 	}
 }
 

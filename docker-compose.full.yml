@@ -1,13 +1,7 @@
-# Default VPS production: db + api + caddy only (Nuxt/Vue is on Vercel).
-# Does NOT build the web container.
+# Optional: full stack with Nuxt web on the VPS (not used when UI is on Vercel).
+# Prefer docker-compose.prod.yml for normal deploys.
 #
-# Usage:
-#   cp .env.production.example .env.production
-#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
-#
-# Behind nginx (DentalPin): Caddy HTTP on 8080 by default.
-#   nginx TLS → 127.0.0.1:8080 (Host preserved)
-# Need Docker UI again later? Use docker-compose.full.yml
+#   docker compose -f docker-compose.full.yml --env-file .env.production up -d --build
 
 services:
   db:
@@ -41,9 +35,6 @@ services:
       S3_BUCKET: ${S3_BUCKET:-quantum-dental-patients-files}
       S3_REGION: ${S3_REGION:-ap-south-1}
       S3_URL_TTL: ${S3_URL_TTL:-3600}
-      REPORTING_API_URL: ${REPORTING_API_URL:-}
-      REPORTING_API_KEY: ${REPORTING_API_KEY:-}
-      REPORTING_GROUP_ID: ${REPORTING_GROUP_ID:-1}
     command: >
       uvicorn app.main:app
       --host 0.0.0.0
@@ -60,6 +51,17 @@ services:
       timeout: 5s
       retries: 10
 
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NUXT_PUBLIC_API_BASE: /api
+    restart: unless-stopped
+    environment:
+      NUXT_PUBLIC_API_BASE: /api
+    depends_on:
+      - api
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -70,10 +72,11 @@ services:
       CADDY_API_DOMAIN: ${CADDY_API_DOMAIN:-api.${CADDY_DOMAIN}}
       CADDY_EMAIL: ${CADDY_EMAIL:-admin@example.com}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile.full:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
+      - web
       - api
 
 volumes:

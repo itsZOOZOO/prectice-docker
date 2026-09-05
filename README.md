@@ -58,9 +58,12 @@ apps/api/                 FastAPI (Python 3.12)
     apply_indexes.py/.sql
 apps/web/                 Nuxt 4 + Nuxt UI
 docker-compose.yml        local API+Postgres (optional)
-docker-compose.prod.yml   VPS: db + api + web + caddy
-Caddyfile                 HTTPS, /api → api, else → web
+docker-compose.prod.yml   VPS default: db + api + caddy (no Vue — UI on Vercel)
+docker-compose.full.yml   optional VPS UI: also builds Nuxt web
+Caddyfile                 API-only hosts (prod)
+Caddyfile.full            full stack (proxies UI to web)
 .env.production.example   template for VPS secrets
+docs/deploy-vercel-vps.md Vercel + VPS API deploy notes
 ```
 
 ---
@@ -92,13 +95,16 @@ python scripts/apply_indexes.py
 
 **Yes — another agent can deploy this with Docker** if the VPS has Docker + Compose, a domain pointing at the VPS, and ports 80/443 open. Compose file is ready; empty DB boots, then import data.
 
-### Vercel frontend + VPS API (trial)
+### Vercel frontend + VPS API
 
 See **[docs/deploy-vercel-vps.md](docs/deploy-vercel-vps.md)**.
 
-- **Do not** spin up a second Docker stack.
-- Same compose: add `CADDY_API_DOMAIN=api.dental.navapp.in`, CORS for `*.vercel.app`, deploy Nuxt from `apps/web` on Vercel with `NUXT_PUBLIC_API_BASE=https://api.dental.navapp.in/api`.
-- Keep `dental.navapp.in` as full Docker UI for rollback.
+| Compose file | Services |
+|--------------|----------|
+| **`docker-compose.prod.yml`** (default) | `db` + `api` + `caddy` — **no Vue** |
+| `docker-compose.full.yml` | adds Nuxt `web` (optional; recreate later if needed) |
+
+A naïve “deploy `docker-compose.prod.yml`” will **not** build the frontend.
 
 ### 1) On the VPS (all-in-one Docker)
 
