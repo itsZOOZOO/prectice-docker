@@ -3,6 +3,7 @@ import {
   fetchUnreadActivityCount,
   type ActivityFeedPayload
 } from '~/utils/activity'
+import { applyAppHeight } from '~/utils/viewportHeight'
 
 const route = useRoute()
 const { clinicName, hydrate } = useAuth()
@@ -74,23 +75,52 @@ async function openActivityPatient(clientId: number) {
   await navigateTo(`/clients/${clientId}`)
 }
 
-onMounted(() => {
-  refreshBadges()
-  void refreshActivityCount()
-  document.addEventListener('mousedown', onDocPointer)
-  document.addEventListener('touchstart', onDocPointer)
+const showBottomNav = computed(() => !route.path.startsWith('/clients/'))
+/** Clinic branding + Use desktop + bell + ⋮ — Patients home only. */
+const showShellHeader = computed(() => route.path === '/dashboard')
+provide('mobileRefreshBadges', refreshBadges)
+
+const shellRef = ref<HTMLElement | null>(null)
+/** Remount page tree after height is known — same effect as desk↔mobile. */
+const pagePortKey = ref(0)
+
+function kickMobileScrollport() {
+  applyAppHeight()
+  const el = shellRef.value
+  if (el) void el.offsetHeight
+}
+
+async function armScrollport() {
+  kickMobileScrollport()
+  await nextTick()
+  kickMobileScrollport()
+  pagePortKey.value += 1
+  await nextTick()
   kickMobileScrollport()
   requestAnimationFrame(() => {
     kickMobileScrollport()
     requestAnimationFrame(kickMobileScrollport)
   })
-  window.setTimeout(kickMobileScrollport, 100)
-  window.setTimeout(kickMobileScrollport, 400)
+}
+
+onMounted(() => {
+  refreshBadges()
+  void refreshActivityCount()
+  document.addEventListener('mousedown', onDocPointer)
+  document.addEventListener('touchstart', onDocPointer)
+  void armScrollport()
+  // Second pass: URL bar / visualViewport often settles after first paint
+  window.setTimeout(() => {
+    kickMobileScrollport()
+    pagePortKey.value += 1
+  }, 150)
+  window.setTimeout(kickMobileScrollport, 500)
 })
 onUnmounted(() => {
   document.removeEventListener('mousedown', onDocPointer)
   document.removeEventListener('touchstart', onDocPointer)
 })
+
 watch(() => route.path, () => {
   moreOpen.value = false
   void refreshActivityCount()
@@ -98,26 +128,6 @@ watch(() => route.path, () => {
 watch(activityOpen, () => {
   void refreshActivityCount()
 })
-
-const showBottomNav = computed(() => !route.path.startsWith('/clients/'))
-/** Clinic branding + Use desktop + bell + ⋮ — Patients home only. */
-const showShellHeader = computed(() => route.path === '/dashboard')
-provide('mobileRefreshBadges', refreshBadges)
-
-const shellRef = ref<HTMLElement | null>(null)
-
-/** Android: force scrollport metrics after mount / route (cold start bug). */
-function kickMobileScrollport() {
-  const el = shellRef.value
-  if (!el) return
-  void el.offsetHeight
-  const h = Math.round(window.visualViewport?.height ?? window.innerHeight)
-  if (h > 0) {
-    document.documentElement.style.setProperty('--app-height', `${h}px`)
-  }
-  window.dispatchEvent(new Event('resize'))
-}
-
 watch(() => route.fullPath, () => {
   nextTick(() => {
     kickMobileScrollport()
@@ -130,7 +140,7 @@ watch(() => route.fullPath, () => {
   <div ref="shellRef" class="mobile-shell mx-auto max-w-[480px]">
     <header
       v-if="showShellHeader"
-      class="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-3"
+      class="mobile-shell__header flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-3"
     >
       <div class="flex min-w-0 items-center gap-2">
         <img
@@ -205,8 +215,13 @@ watch(() => route.fullPath, () => {
       </div>
     </header>
 
-    <main class="min-h-0 flex-1">
-      <slot />
+    <main class="mobile-shell__main min-h-0 flex-1">
+      <div
+        :key="pagePortKey"
+        class="mobile-shell__page flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+      >
+        <slot />
+      </div>
     </main>
 
     <nav

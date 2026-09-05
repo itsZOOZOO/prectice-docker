@@ -439,8 +439,8 @@ function shouldShowNowAtEnd(section: DaySection): boolean {
 </script>
 
 <template>
-  <div class="relative flex h-full min-h-0 flex-col bg-[#F0F4F8]">
-    <div class="shrink-0 bg-[#0097A7] px-4 pb-3 pt-3">
+  <div class="mobile-page relative bg-[#F0F4F8]">
+    <div class="mobile-page__chrome bg-[#0097A7] px-4 pb-3 pt-3">
       <div class="mb-2 flex items-center gap-1.5">
         <button
           type="button"
@@ -544,7 +544,7 @@ function shouldShowNowAtEnd(section: DaySection): boolean {
 
     <div
       ref="scrollEl"
-      class="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-4 py-3 pb-24 [-webkit-overflow-scrolling:touch]"
+      class="mobile-page__scroll px-4 py-3 pb-24"
       @scroll.passive="onAgendaScroll"
     >
       <p v-if="loading" class="py-12 text-center text-sm text-slate-400">Loading appointments…</p>

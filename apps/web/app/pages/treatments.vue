@@ -42,8 +42,8 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col bg-[#F0F4F8]">
-    <header class="shrink-0 border-b border-slate-200 bg-white px-4 py-4">
+  <div class="mobile-page bg-[#F0F4F8]">
+    <header class="mobile-page__chrome border-b border-slate-200 bg-white px-4 py-4">
       <div class="flex items-start justify-between gap-3">
         <div>
           <h1 class="text-lg font-semibold text-[#1C2B35]">
@@ -71,7 +71,7 @@ onMounted(load)
       </span>
     </header>
 
-    <main class="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-y-contain px-4 py-4 pb-24 [-webkit-overflow-scrolling:touch]">
+    <main class="mobile-page__scroll space-y-4 px-4 py-4 pb-24">
       <div
         v-if="loading"
         class="flex items-center justify-center gap-2 py-16 text-sm text-slate-400"

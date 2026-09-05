@@ -165,8 +165,8 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col bg-[#F0F4F8]">
-    <div class="shrink-0 border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
+  <div class="mobile-page bg-[#F0F4F8]">
+    <div class="mobile-page__chrome border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
       <div class="mb-3 flex items-center justify-between gap-2">
         <button
           type="button"
@@ -231,7 +231,7 @@ onMounted(load)
       </div>
     </div>
 
-    <div class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain px-4 py-4 pb-24 [-webkit-overflow-scrolling:touch]">
+    <div class="mobile-page__scroll space-y-3 px-4 py-4 pb-24">
       <p v-if="loading" class="py-16 text-center text-sm text-slate-400">Loading tasks…</p>
       <template v-else>
         <button

@@ -174,8 +174,8 @@ const tabCount = computed(() => 2 + dashboardFilters.value.length)
 </script>
 
 <template>
-  <div class="relative flex h-full min-h-0 flex-col">
-    <div class="shrink-0 space-y-3 border-b border-slate-200 bg-white px-4 py-3">
+  <div class="mobile-page relative bg-[#F0F4F8]">
+    <div class="mobile-page__chrome space-y-3 border-b border-slate-200 bg-white px-4 py-3">
       <div class="relative">
         <input
           v-model="q"
@@ -233,7 +233,7 @@ const tabCount = computed(() => 2 + dashboardFilters.value.length)
       </div>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-3 py-3 pb-24 [-webkit-overflow-scrolling:touch]">
+    <div class="mobile-page__scroll px-3 py-3 pb-24">
       <p v-if="loading" class="py-10 text-center text-sm text-slate-400">Loading…</p>
       <ul v-else class="space-y-2">
         <li v-for="c in list" :key="c.client_id">

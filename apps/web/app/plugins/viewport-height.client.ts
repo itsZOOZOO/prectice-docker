@@ -1,44 +1,41 @@
+import { applyAppHeight } from '~/utils/viewportHeight'
+
 /**
- * Keep --app-height in sync with the visible viewport.
- * Android Chrome often reports wrong % heights on first paint; scrolling
- * only starts working after a layout remount (e.g. desk ↔ mobile). Using
- * visualViewport.height fixes the cold-start scrollport.
+ * Keep --app-height in sync. Prefer the shortest viewport metric so Android
+ * cold-start scrollports actually overflow (and can scroll).
  */
 export default defineNuxtPlugin(() => {
   if (!import.meta.client) return
 
-  function setAppHeight() {
-    const vv = window.visualViewport
-    const h = Math.round(vv?.height ?? window.innerHeight)
-    if (h > 0) {
-      document.documentElement.style.setProperty('--app-height', `${h}px`)
-    }
+  function sync() {
+    applyAppHeight()
   }
 
-  setAppHeight()
-  // Second pass after first layout / font / UI chrome settle
+  sync()
   requestAnimationFrame(() => {
-    setAppHeight()
-    requestAnimationFrame(setAppHeight)
+    sync()
+    requestAnimationFrame(sync)
   })
-  window.setTimeout(setAppHeight, 50)
-  window.setTimeout(setAppHeight, 250)
-  window.setTimeout(setAppHeight, 1000)
+  window.setTimeout(sync, 0)
+  window.setTimeout(sync, 50)
+  window.setTimeout(sync, 200)
+  window.setTimeout(sync, 500)
+  window.setTimeout(sync, 1200)
 
-  window.addEventListener('resize', setAppHeight)
-  window.addEventListener('orientationchange', setAppHeight)
-  window.addEventListener('pageshow', setAppHeight)
+  window.addEventListener('resize', sync)
+  window.addEventListener('orientationchange', sync)
+  window.addEventListener('pageshow', sync)
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') setAppHeight()
+    if (document.visibilityState === 'visible') sync()
   })
 
   const vv = window.visualViewport
-  vv?.addEventListener('resize', setAppHeight)
-  vv?.addEventListener('scroll', setAppHeight)
+  vv?.addEventListener('resize', sync)
+  vv?.addEventListener('scroll', sync)
 
   const router = useRouter()
   router.afterEach(() => {
-    setAppHeight()
-    requestAnimationFrame(setAppHeight)
+    sync()
+    requestAnimationFrame(sync)
   })
 })
